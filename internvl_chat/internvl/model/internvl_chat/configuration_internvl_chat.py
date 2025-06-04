@@ -22,44 +22,70 @@ class InternVLChatConfig(PretrainedConfig):
     is_composition = True
 
     def __init__(
-            self,
-            vision_config=None,
-            llm_config=None,
-            use_backbone_lora=0,
-            use_llm_lora=0,
-            pad2square=False,
-            select_layer=-1,
-            force_image_size=None,
-            downsample_ratio=0.5,
-            template=None,
-            dynamic_image_size=False,
-            use_thumbnail=False,
-            ps_version='v1',
-            min_dynamic_patch=1,
-            max_dynamic_patch=6,
-            **kwargs):
+        self,
+        vision_config=None,
+        llm_config=None,
+        video_encoder_config=None,
+        use_backbone_lora=0,
+        use_llm_lora=0,
+        pad2square=False,
+        select_layer=-1,
+        force_image_size=None,
+        downsample_ratio=0.5,
+        template=None,
+        dynamic_image_size=False,
+        use_thumbnail=False,
+        ps_version='v1',
+        min_dynamic_patch=1,
+        max_dynamic_patch=6,
+        use_video_encoder=False,
+        video_encoder_latent_len=1024,
+        **kwargs
+    ):
         super().__init__(**kwargs)
 
+        # Initialize vision config
         if vision_config is None:
             vision_config = {'architectures': ['InternVisionModel']}
             logger.info('vision_config is None. Initializing the InternVisionConfig with default values.')
-
-        if llm_config is None:
-            # TODO: There might still be a bug in transformers version 4.44 and above.
-            llm_config = {'architectures': ['']}
-            logger.info('llm_config is None. Initializing the LlamaConfig config with default values (`LlamaConfig`).')
-
         self.vision_config = InternVisionConfig(**vision_config)
-        if llm_config['architectures'][0] == 'LlamaForCausalLM':
+
+        # Initialize LLM config
+        if llm_config is None:
+            llm_config = {}
+            logger.info('llm_config is None. Initializing the LLM config with default values.')
+
+        llm_architecture = llm_config['architectures'][0]
+        if llm_architecture == 'LlamaForCausalLM':
             self.llm_config = LlamaConfig(**llm_config)
-        elif llm_config['architectures'][0] == 'InternLM2ForCausalLM':
+        elif llm_architecture == 'InternLM2ForCausalLM':
             self.llm_config = InternLM2Config(**llm_config)
-        elif llm_config['architectures'][0] == 'Phi3ForCausalLM':
+        elif llm_architecture == 'Phi3ForCausalLM':
             self.llm_config = Phi3Config(**llm_config)
-        elif llm_config['architectures'][0] == 'Qwen2ForCausalLM':
+        elif llm_architecture == 'Qwen2ForCausalLM':
             self.llm_config = Qwen2Config(**llm_config)
         else:
-            raise ValueError('Unsupported architecture: {}'.format(llm_config['architectures'][0]))
+            raise ValueError(f'Unsupported architecture: {llm_architecture}')
+        
+        # Initialize video encoder config
+        self.use_video_encoder = use_video_encoder
+        self.video_encoder_latent_len = video_encoder_latent_len
+        
+        if use_video_encoder:
+            if video_encoder_config is None:
+                # Default video encoder config based on Qwen2
+                video_encoder_config = {
+                    'architectures': ['VideoChatFlashQwenForCausalLM'],
+                    # Add other necessary default parameters
+                }
+                logger.info('video_encoder_config is None but use_video_encoder is True. Initializing with default values.')
+            
+            from ..videochat_flash.modeling_videochat_flash import VideoChatFlashQwenConfig
+            self.video_encoder_config = VideoChatFlashQwenConfig(**video_encoder_config)
+        else:
+            self.video_encoder_config = None
+            
+        # Set other configuration parameters
         self.use_backbone_lora = use_backbone_lora
         self.use_llm_lora = use_llm_lora
         self.pad2square = pad2square
@@ -73,15 +99,22 @@ class InternVLChatConfig(PretrainedConfig):
         self.min_dynamic_patch = min_dynamic_patch
         self.max_dynamic_patch = max_dynamic_patch
 
+        # Set derived configuration
         self.hidden_size = self.llm_config.hidden_size
         # By default, we use tie_word_embeddings=False for models of all sizes.
         self.tie_word_embeddings = False
         self.llm_config.tie_word_embeddings = self.tie_word_embeddings
 
+        # Log configuration information
         logger.info(f'vision_select_layer: {self.select_layer}')
         logger.info(f'ps_version: {self.ps_version}')
         logger.info(f'min_dynamic_patch: {self.min_dynamic_patch}')
         logger.info(f'max_dynamic_patch: {self.max_dynamic_patch}')
+        logger.info(f'use_video_encoder: {self.use_video_encoder}')
+        
+        if self.use_video_encoder:
+            logger.info(f'video_encoder_latent_len: {self.video_encoder_latent_len}')
+            logger.info(f'video_encoder_config: {self.video_encoder_config}')
 
     def to_dict(self):
         """
@@ -93,6 +126,10 @@ class InternVLChatConfig(PretrainedConfig):
         output = copy.deepcopy(self.__dict__)
         output['vision_config'] = self.vision_config.to_dict()
         output['llm_config'] = self.llm_config.to_dict()
+        
+        if self.video_encoder_config is not None:
+            output['video_encoder_config'] = self.video_encoder_config.to_dict()
+            
         output['model_type'] = self.__class__.model_type
         output['use_backbone_lora'] = self.use_backbone_lora
         output['use_llm_lora'] = self.use_llm_lora
@@ -105,5 +142,7 @@ class InternVLChatConfig(PretrainedConfig):
         output['ps_version'] = self.ps_version
         output['min_dynamic_patch'] = self.min_dynamic_patch
         output['max_dynamic_patch'] = self.max_dynamic_patch
+        output['use_video_encoder'] = self.use_video_encoder
+        output['video_encoder_latent_len'] = self.video_encoder_latent_len
 
         return output

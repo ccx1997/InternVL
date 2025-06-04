@@ -47,7 +47,8 @@ from internvl.train.constants import (BOX_END_TOKEN, BOX_START_TOKEN,
                                       IMG_CONTEXT_TOKEN, IMG_END_TOKEN,
                                       IMG_START_TOKEN, QUAD_END_TOKEN,
                                       QUAD_START_TOKEN, REF_END_TOKEN,
-                                      REF_START_TOKEN)
+                                      REF_START_TOKEN, ENV_CONTEXT_TOKEN,
+                                      ENV_START_TOKEN, ENV_END_TOKEN)
 from internvl.train.dataset import (ConcatDataset, TCSLoader,
                                     WeightedConcatDataset, build_transform,
                                     check_conversations_repetition,
@@ -64,6 +65,11 @@ from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils.logging import (enable_default_handler,
                                         enable_explicit_format, set_verbosity)
+
+# Import video encoder related modules
+from internvl.model.videochat_flash.mm_utils import tokenizer_image_token, KeywordsStoppingCriteria, load_video
+from internvl.model.videochat_flash.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
+from internvl.model.videochat_flash.conversation import conv_templates, SeparatorStyle
 
 # Try to import petrel_client for image loading, fallback to PIL if unavailable
 try:
@@ -173,6 +179,14 @@ class ModelArguments:
         default=False,
         metadata={'help': 'Set to True to freeze the MLP. Default is False.'},
     )
+    freeze_video_encoder: bool = field(
+        default=False,
+        metadata={'help': 'Set to True to freeze the video encoder. Default is False.'},
+    )
+    train_llm_embed_only: bool = field(
+        default=False,
+        metadata={'help': 'Set to True to train only LLM embedding layers (input embedding and lm_head). Default is False.'},
+    )
     unfreeze_vit_layers: int = field(
         default=0,
         metadata={'help': 'Specify the number of ViT layers to unfreeze. Default is 0.'},
@@ -276,6 +290,26 @@ class DataTrainingArguments:
         default=30,
         metadata={'help': 'The maximum number of frames for video data. Default is 32.'},
     )
+    min_video_encoder_frame: int = field(
+        default=8,
+        metadata={'help': 'The minimum number of frames for video encoder. Default is 4.'},
+    )
+    max_video_encoder_frame: int = field(
+        default=48,
+        metadata={'help': 'The maximum number of frames for video encoder. Default is 16.'},
+    )
+    max_video_encoder_length: int = field(
+        default=8192,
+        metadata={'help': 'The maximum input length for video encoder. Default is 8192.'},
+    )
+    video_encoder_user_prompt: str = field(
+        default="Compress the video into new or updated latent features!",
+        metadata={'help': 'The user prompt for video encoder. Default is "Compress them into latent features!".'},
+    )
+    video_encoder_tokenizer_path: str = field(
+        default="/mnt/models/VideoChat-Flash-Qwen2_5-2B_res448",
+        metadata={'help': 'The tokenizer path for video encoder. Default is "/mnt/models/VideoChat-Flash-Qwen2_5-2B_res448".'},
+    )
     normalize_type: Literal['imagenet', 'clip', 'siglip'] = field(
         default='imagenet',
         metadata={'help': 'The normalization type for the image. Default is imagenet.'},
@@ -353,6 +387,13 @@ class LazySupervisedDataset(Dataset):
         distributed_mode=False,
         force_shuffle=False,
         random_seed=0,
+        # hyperparameters for video encoder
+        min_video_encoder_frame=4,
+        max_video_encoder_frame=16,
+        max_video_encoder_length=2048,
+        video_encoder_user_prompt="Compress them into latent features!",
+        video_encoder_tokenizer_path="/mnt/models/VideoChat-Flash-Qwen2_5-2B_res448",
+        video_encoder_image_processor=None,  # video encoder image processor for processing frames
     ):
         super(LazySupervisedDataset, self).__init__()
         self.ds_name = ds_name
@@ -436,6 +477,26 @@ class LazySupervisedDataset(Dataset):
                     else:
                         token_length = self.conv2length[str_length]
                 self.length.append(token_length)
+
+        # hyperparameters for video encoder
+        self.min_video_encoder_frame = min_video_encoder_frame
+        self.max_video_encoder_frame = max_video_encoder_frame
+        self.max_video_encoder_length = max_video_encoder_length
+        self.video_encoder_user_prompt = video_encoder_user_prompt
+        self.video_encoder_tokenizer_path = video_encoder_tokenizer_path
+        
+        # Load video encoder tokenizer
+        try:
+            from transformers import AutoTokenizer
+            self.video_encoder_tokenizer = AutoTokenizer.from_pretrained(
+                video_encoder_tokenizer_path, trust_remote_code=True
+            )
+            logger.info(f'Loaded video encoder tokenizer from: {video_encoder_tokenizer_path}')
+        except Exception as e:
+            logger.warning(f'Failed to load video encoder tokenizer: {e}. Using main tokenizer as fallback.')
+            self.video_encoder_tokenizer = tokenizer
+
+        self.video_encoder_image_processor = video_encoder_image_processor
 
     def __len__(self):
         return len(self.raw_data)
@@ -524,7 +585,7 @@ class LazySupervisedDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
-            image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
+            image_flags=torch.tensor([1] * num_patches, dtype=torch.long),
         )
         return ret
 
@@ -574,7 +635,7 @@ class LazySupervisedDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
-            image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
+            image_flags=torch.tensor([1] * num_patches, dtype=torch.long),
         )
         return ret
 
@@ -686,6 +747,88 @@ class LazySupervisedDataset(Dataset):
                 logger.error(f"Error loading video {video_path}: {e}")
                 return []
 
+    def prepare_env_video_params(self, env_video_path):
+        """
+        Prepare video encoder parameters for env_video following VideoChatFlashQwenForCausalLM.chat() logic
+        
+        Args:
+            env_video_path: Path to the environment video file
+            
+        Returns:
+            video_enc_params: Dictionary containing parameters for VideoChatFlashQwenForCausalLM.forward
+        """
+        # Load video frames using VideoChat Flash's load_video function directly
+        media_dict = {'video_read_type': 'decord'}
+        frames, time_msg = load_video(env_video_path, max_num_frames=self.max_video_encoder_frame, media_dict=media_dict)
+        
+        if frames is None or len(frames) == 0:
+            return None
+            
+        # Convert numpy frames to PIL Images for image_processor compatibility
+        if isinstance(frames, np.ndarray):
+            # frames is a numpy array of shape (T, H, W, C)
+            frames_pil = [Image.fromarray(frame.astype(np.uint8)) for frame in frames]
+        else:
+            frames_pil = frames
+            
+        # Get image sizes (following chat method logic)
+        image_sizes = [frames_pil[0].size[::-1]]  # PIL size is (width, height), convert to (height, width)
+        
+        # Prepare user prompt for video encoder
+        user_prompt = self.video_encoder_user_prompt
+        
+        # Follow chat() method logic
+        conv = conv_templates["qwen_2"].copy()
+        
+        # Add DEFAULT_IMAGE_TOKEN and time_msg to user_prompt following chat() method
+        formatted_user_prompt = f'{DEFAULT_IMAGE_TOKEN}\n{time_msg.strip()} {user_prompt}'
+        
+        conv.append_message(conv.roles[0], formatted_user_prompt)
+        conv.append_message(conv.roles[1], None)
+        
+        prompt = conv.get_prompt()
+        
+        # Use tokenizer_image_token as in chat() method
+        input_ids = tokenizer_image_token(prompt, self.video_encoder_tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0)
+        
+        # Set pad_token_id if needed (following chat() method)
+        if self.video_encoder_tokenizer.pad_token_id is None:
+            if "qwen" in self.video_encoder_tokenizer.name_or_path.lower():
+                self.video_encoder_tokenizer.pad_token_id = 151643
+        
+        # Create attention mask following chat() method
+        attention_mask = input_ids.ne(self.video_encoder_tokenizer.pad_token_id).long()
+        
+        # Convert frames to the format expected by video encoder
+        # Process frames using video_encoder's image_processor if available
+        if self.video_encoder_image_processor is not None and hasattr(self.video_encoder_image_processor, 'preprocess'):
+            try:
+                # Process frames similar to chat() method
+                processed_frames = self.video_encoder_image_processor.preprocess(
+                    frames_pil, return_tensors="pt")["pixel_values"]
+                # Convert to list format as expected by chat() method
+                processed_frames = [processed_frames]
+                frames = processed_frames
+            except Exception as e:
+                logger.warning(f"Failed to preprocess frames with video_encoder: {e}. Using raw frames.")
+                frames = frames_pil
+        else:
+            frames = frames_pil
+        
+        # Prepare parameters following chat() method's generate call format
+        video_enc_params = {
+            'input_ids': input_ids,  # corresponds to inputs parameter
+            'images': frames,  # corresponds to images parameter  
+            'attention_mask': attention_mask,  # corresponds to attention_mask parameter
+            'modalities': ["video"],  # corresponds to modalities parameter
+            'image_sizes': image_sizes,  # corresponds to image_sizes parameter
+            'max_num_frames': len(frames),
+            'max_video_encoder_length': self.max_video_encoder_length,
+            'user_prompt': user_prompt,  # keep original text for reference
+        }
+        
+        return video_enc_params
+
     def video_get_item(self, data_item):
         # Build transformation function
         transform = self.get_transform()
@@ -741,7 +884,7 @@ class LazySupervisedDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
-            image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
+            image_flags=torch.tensor([1] * num_patches, dtype=torch.long),
         )
         return ret
 
@@ -784,9 +927,20 @@ class LazySupervisedDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
-            image_flags=torch.tensor([0] * num_patches, dtype=torch.long)
+            image_flags=torch.tensor([0] * num_patches, dtype=torch.long),
         )
         return ret
+
+    def get_env_context_count(self, video_enc_params):
+        """
+        Determine the number of ENV_CONTEXT tokens needed based on video encoder configuration.
+        This should match the latent_len used in the video encoder model.
+        """
+        if video_enc_params is None:
+            return 0
+        # Use the configured video encoder latent length
+        # This should match the video_encoder_latent_len in the model config (default 1024)
+        return 1024  # Fixed number of context tokens to match video encoder output
 
     def _enable_worker_distributed(self):
         if (
@@ -811,8 +965,26 @@ class LazySupervisedDataset(Dataset):
                 raise StopIteration
             try:
                 data_item = json.loads(self.raw_data[i])
-                # conversations = data_item['conversations']
-                # check_conversations_repetition(conversations, repeat_threshold=0.4, ngram=10)
+                
+                # Check if env_video exists and prepare video encoder params
+                video_enc_params = None
+                if 'env_video' in data_item and data_item['env_video'] is not None and data_item['env_video'] != '':
+                    env_video_path = os.path.join(self.root, data_item['env_video'])
+                    video_enc_params = self.prepare_env_video_params(env_video_path)
+                    
+                    # Add environment context tokens to the first user message if env_video exists
+                    if video_enc_params is not None and len(data_item['conversations']) > 0:
+                        # Find the first human message
+                        for conv_item in data_item['conversations']:
+                            if conv_item['from'] == 'human':
+                                # Get the number of ENV_CONTEXT tokens needed
+                                env_context_count = self.get_env_context_count(video_enc_params)
+                                # Add environment tokens before the user question
+                                env_tokens = f"{ENV_START_TOKEN}{ENV_CONTEXT_TOKEN * env_context_count}{ENV_END_TOKEN}"
+                                conv_item['value'] = env_tokens + '\n' + conv_item['value']
+                                break
+                
+                # Process the data item based on its type (unchanged logic)
                 if 'image' in data_item and len(data_item['image']) != 0:
                     if type(data_item['image']) == list:
                         ret = self.multi_modal_multi_image_get_item(data_item)
@@ -822,6 +994,9 @@ class LazySupervisedDataset(Dataset):
                     ret = self.video_get_item(data_item)
                 else:
                     ret = self.pure_text_get_item(data_item)
+                
+                # Add video encoder params to return dict
+                ret['video_enc_params'] = video_enc_params
                 break
             except Exception as e:
                 try_cnt += 1
@@ -878,10 +1053,11 @@ def build_datasets(
     min_num_frame=8,
     max_num_frame=32,
     normalize_type='imagenet',
+    video_encoder_image_processor=None,
 ):
     datasets = []
     lengths = []
-    # 安全地获取分布式参数
+    # Safely get distributed parameters
     if dist.is_available() and dist.is_initialized():
         data_rank = dist.get_rank()
         data_world_size = dist.get_world_size()
@@ -921,6 +1097,13 @@ def build_datasets(
             distributed_mode=data_args.use_packed_ds,
             force_shuffle=data_args.use_packed_ds,
             random_seed=ds_idx,
+            # hyperparameters for video encoder
+            min_video_encoder_frame=data_args.min_video_encoder_frame,
+            max_video_encoder_frame=data_args.max_video_encoder_frame,
+            max_video_encoder_length=data_args.max_video_encoder_length,
+            video_encoder_user_prompt=data_args.video_encoder_user_prompt,
+            video_encoder_tokenizer_path=data_args.video_encoder_tokenizer_path,
+            video_encoder_image_processor=video_encoder_image_processor,
         )
         logger.info(f'Add dataset: {ds_name} with length: {len(dataset)}')
         datasets.append(dataset)
@@ -977,7 +1160,7 @@ def main():
     # See all possible arguments in src/transformers/training_args.py
     # If use DeepSpeed zero3, init_dist must before HfArgumentParser
     launcher = os.environ.get('LAUNCHER', 'pytorch')
-    # 只在多GPU或设置了分布式环境变量时初始化分布式
+    # Only initialize distributed when using multiple GPUs or distributed environment variables are set
     if torch.cuda.device_count() > 1 or 'RANK' in os.environ or 'LOCAL_RANK' in os.environ:
         init_dist(launcher=launcher, backend='nccl')
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
@@ -1047,6 +1230,16 @@ def main():
                   REF_END_TOKEN, BOX_START_TOKEN, BOX_END_TOKEN]
     num_new_tokens = tokenizer.add_tokens(token_list, special_tokens=True)
     img_context_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
+    
+    # Add environment context tokens for video encoder
+    env_ctx_token_list = [ENV_CONTEXT_TOKEN, ENV_START_TOKEN, ENV_END_TOKEN]
+    num_env_tokens = tokenizer.add_tokens(env_ctx_token_list, special_tokens=True)
+    logger.info(f'new num_env_tokens: {num_env_tokens}')
+    env_ctx_token_id = tokenizer.convert_tokens_to_ids(ENV_CONTEXT_TOKEN)
+    env_start_token_id = tokenizer.convert_tokens_to_ids(ENV_START_TOKEN)
+    env_end_token_id = tokenizer.convert_tokens_to_ids(ENV_END_TOKEN)
+    num_new_tokens += num_env_tokens
+    
     tcs_loader = TCSLoader('~/petreloss.conf') if has_tcs_loader else None
 
     if data_args.use_packed_ds:
@@ -1072,7 +1265,7 @@ def main():
             logger.info('Using flash_attention_2 for InternLM')
         else:
             config.llm_config._attn_implementation = 'flash_attention_2'  # for LLaMA
-            logger.info('Using flash_attention_2 for LLaMA')
+            logger.info(f'Using flash_attention_2 for {config.llm_config.model_type}')
         config.template = data_args.conv_style
         config.select_layer = model_args.vision_select_layer
         config.dynamic_image_size = data_args.dynamic_image_size
@@ -1112,6 +1305,9 @@ def main():
         logger.info('Building InternVLChatModel...')
         model = InternVLChatModel(internvl_chat_config, vision_model, llm)
     model.img_context_token_id = img_context_token_id
+    model.env_ctx_token_id = env_ctx_token_id
+    model.env_start_token_id = env_start_token_id
+    model.env_end_token_id = env_end_token_id
 
     assert model.config.downsample_ratio == data_args.down_sample_ratio
 
@@ -1152,16 +1348,99 @@ def main():
     if model_args.grad_checkpoint:
         model.language_model._set_gradient_checkpointing()
 
+    if hasattr(model, 'video_encoder') and model.video_encoder is not None:
+        video_encoder_image_processor = model.video_encoder.get_vision_tower().image_processor
+        
+        # Apply VideoChatFlash optimizations only when video encoder is not frozen
+        from internvl.model.videochat_flash.modeling_videochat_flash import VideoChatFlashQwenForCausalLM
+        
+        if isinstance(model.video_encoder, VideoChatFlashQwenForCausalLM) and not model_args.freeze_video_encoder:
+            logger.info('Applying training optimizations for VideoChatFlashQwenForCausalLM...')
+            
+            # Enable training optimizations
+            try:
+                # Try the comprehensive optimization method first
+                model.video_encoder.enable_training_optimizations()
+                logger.info('✅ VideoChatFlash training optimizations enabled successfully')
+                
+                # Verify optimizations were applied
+                gc_enabled = getattr(model.video_encoder.model, 'gradient_checkpointing', False)
+                attn_impl = getattr(model.video_encoder.config, '_attn_implementation', 'unknown')
+                logger.info(f'📊 Optimization Status:')
+                logger.info(f'  - Gradient Checkpointing: {"✅" if gc_enabled else "❌"}')
+                logger.info(f'  - Attention Implementation: {attn_impl}')
+                logger.info(f'  - Training Mode: {"✅" if model.video_encoder.training else "❌"}')
+                
+            except Exception as e:
+                logger.warning(f'⚠️ Failed to enable comprehensive training optimizations: {e}')
+                logger.warning('Attempting manual optimization fallback...')
+                
+                # Fallback to manual optimization with better error handling
+                optimization_success = []
+                
+                # Try Flash Attention 2
+                try:
+                    model.video_encoder.enable_flash_attention_2()
+                    optimization_success.append('Flash Attention 2')
+                    logger.info('✅ Flash Attention 2 enabled')
+                except Exception as e2:
+                    logger.warning(f'❌ Flash Attention 2 failed: {e2}')
+                
+                # Try Gradient Checkpointing with multiple approaches
+                try:
+                    model.video_encoder.enable_gradient_checkpointing()
+                    optimization_success.append('Gradient Checkpointing')
+                    logger.info('✅ Gradient Checkpointing enabled')
+                except Exception as e3:
+                    logger.warning(f'❌ Gradient Checkpointing failed: {e3}')
+                    # Try direct attribute setting as last resort
+                    try:
+                        if hasattr(model.video_encoder, 'model'):
+                            model.video_encoder.model.gradient_checkpointing = True
+                        if hasattr(model.video_encoder, 'gradient_checkpointing'):
+                            model.video_encoder.gradient_checkpointing = True
+                        optimization_success.append('Basic Gradient Checkpointing')
+                        logger.info('✅ Basic Gradient Checkpointing enabled as fallback')
+                    except Exception as e4:
+                        logger.error(f'❌ All gradient checkpointing methods failed: {e4}')
+                
+                # Set training mode
+                try:
+                    model.video_encoder.train()
+                    optimization_success.append('Training Mode')
+                    logger.info('✅ Training mode enabled')
+                except Exception as e5:
+                    logger.warning(f'❌ Failed to set training mode: {e5}')
+                
+                if optimization_success:
+                    logger.info(f'✅ Manual optimizations applied: {", ".join(optimization_success)}')
+                else:
+                    logger.error('❌ All optimization attempts failed')
+            
+        elif isinstance(model.video_encoder, VideoChatFlashQwenForCausalLM) and model_args.freeze_video_encoder:
+            logger.info('🔒 VideoChatFlash is frozen, skipping training optimizations')
+        else:
+            logger.info(f'ℹ️ Video encoder type: {type(model.video_encoder).__name__}')
+            logger.info('ℹ️ No VideoChatFlash optimizations applied')
+    else:
+        video_encoder_image_processor = None
+        logger.info('No video encoder found in the model')
+    
     train_dataset = build_datasets(
         data_args, tokenizer, tcs_loader, model, group_by_length=training_args.group_by_length,
         dynamic_image_size=data_args.dynamic_image_size, use_thumbnail=data_args.use_thumbnail,
         min_dynamic_patch=data_args.min_dynamic_patch, max_dynamic_patch=data_args.max_dynamic_patch,
         normalize_type=data_args.normalize_type, min_num_frame=data_args.min_num_frame,
-        max_num_frame=data_args.max_num_frame)
+        max_num_frame=data_args.max_num_frame,
+        video_encoder_image_processor=video_encoder_image_processor)
 
     def _freeze_params(module):
         for param in module.parameters():
             param.requires_grad = False
+    
+    def _unfreeze_params(module):
+        for param in module.parameters():
+            param.requires_grad = True
 
     if model_args.freeze_backbone:
         # model.vision_model = model.vision_model.eval()
@@ -1174,6 +1453,29 @@ def main():
     if model_args.unfreeze_lm_head:
         model.language_model.lm_head.requires_grad = True
 
+    if model_args.train_llm_embed_only:
+        # First freeze all LLM parameters
+        _freeze_params(model.language_model)
+        logger.info('All LLM parameters frozen for embed-only training')
+        
+        # Then unfreeze only embedding layers
+        # Unfreeze input embedding layer
+        if hasattr(model.language_model, 'embed_tokens'):
+            _unfreeze_params(model.language_model.embed_tokens)
+            logger.info('LLM input embedding layer (embed_tokens) unfrozen')
+        elif hasattr(model.language_model, 'model') and hasattr(model.language_model.model, 'embed_tokens'):
+            _unfreeze_params(model.language_model.model.embed_tokens)
+            logger.info('LLM input embedding layer (model.embed_tokens) unfrozen')
+        else:
+            logger.warning('Could not find input embedding layer to unfreeze')
+        
+        # Unfreeze output layer (lm_head)
+        if hasattr(model.language_model, 'lm_head'):
+            _unfreeze_params(model.language_model.lm_head)
+            logger.info('LLM output layer (lm_head) unfrozen')
+        else:
+            logger.warning('Could not find lm_head to unfreeze')
+
     if model_args.use_backbone_lora:
         model.wrap_backbone_lora(r=model_args.use_backbone_lora, lora_alpha=2 * model_args.use_backbone_lora)
         model.config.use_backbone_lora = model_args.use_backbone_lora
@@ -1185,6 +1487,16 @@ def main():
     if model_args.freeze_mlp:
         _freeze_params(model.mlp1)
 
+    if hasattr(model, 'video_encoder') and model.video_encoder is not None:
+        if model_args.freeze_video_encoder:
+            _freeze_params(model.video_encoder)
+            logger.info('Video encoder parameters frozen')
+        else:
+            _unfreeze_params(model.video_encoder)
+            logger.info('Video encoder parameters unfrozen')
+    else:
+        logger.warning('Video encoder not found or not initialized, skipping freeze_video_encoder')
+
     if model_args.unfreeze_vit_layers != 0:
         layers = model.vision_model.encoder.layers[model_args.unfreeze_vit_layers:]
         for k, v in layers.named_parameters():
@@ -1192,7 +1504,7 @@ def main():
             v.requires_grad = True
 
     # print trainable parameters
-    # 安全地检查是否为主进程
+    # Check if this is the main process safely
     is_main_process = True
     if dist.is_available() and dist.is_initialized():
         is_main_process = dist.get_rank() == 0
@@ -1206,6 +1518,51 @@ def main():
 
     # set seed for torch dataloaders
     set_seed(training_args.seed)
+
+    # Save model parameter information to params.txt
+    params_file_path = os.path.join(training_args.output_dir, 'params.txt')
+    os.makedirs(training_args.output_dir, exist_ok=True)
+    
+    with open(params_file_path, 'w', encoding='utf-8') as f:
+        f.write("Parameter_Name\tTensor_Size\tRequires_Grad\n")  # Header
+        for name, param in model.named_parameters():
+            tensor_size = list(param.shape)
+            requires_grad = str(param.requires_grad)
+            f.write(f"{name}\t{tensor_size}\t{requires_grad}\n")
+    
+    logger.info(f'Model parameter information saved to: {params_file_path}')
+    
+    # GPU memory monitoring and final optimization summary
+    if is_main_process and torch.cuda.is_available():
+        try:
+            gpu_memory_mb = torch.cuda.get_device_properties(0).total_memory / 1024 / 1024
+            gpu_allocated_mb = torch.cuda.memory_allocated(0) / 1024 / 1024
+            gpu_cached_mb = torch.cuda.memory_reserved(0) / 1024 / 1024
+            
+            logger.info('🖥️  GPU Memory Status:')
+            logger.info(f'  - Total GPU Memory: {gpu_memory_mb:.0f} MB')
+            logger.info(f'  - Allocated Memory: {gpu_allocated_mb:.0f} MB ({gpu_allocated_mb/gpu_memory_mb*100:.1f}%)')
+            logger.info(f'  - Cached Memory: {gpu_cached_mb:.0f} MB ({gpu_cached_mb/gpu_memory_mb*100:.1f}%)')
+        except Exception as e:
+            logger.warning(f'Failed to get GPU memory info: {e}')
+    
+    # Final optimization summary before trainer initialization
+    if is_main_process:
+        logger.info('🚀 Final Training Configuration Summary:')
+        logger.info(f'  - Mixed Precision (bf16): {"✅" if training_args.bf16 else "❌"}')
+        logger.info(f'  - Gradient Checkpointing: {"✅" if model_args.grad_checkpoint else "❌"}')
+        logger.info(f'  - Video Encoder Frozen: {"✅" if model_args.freeze_video_encoder else "❌"}')
+        
+        if hasattr(model, 'video_encoder') and model.video_encoder is not None:
+            from internvl.model.videochat_flash.modeling_videochat_flash import VideoChatFlashQwenForCausalLM
+            if isinstance(model.video_encoder, VideoChatFlashQwenForCausalLM):
+                gc_enabled = getattr(model.video_encoder.model, 'gradient_checkpointing', False)
+                attn_impl = getattr(model.video_encoder.config, '_attn_implementation', 'unknown')
+                logger.info(f'  - VideoChatFlash Optimizations:')
+                logger.info(f'    * Flash Attention 2: {"✅" if attn_impl == "flash_attention_2" else "❌"} ({attn_impl})')
+                logger.info(f'    * Gradient Checkpointing: {"✅" if gc_enabled else "❌"}')
+                logger.info(f'    * Training Mode: {"✅" if model.video_encoder.training else "❌"}')
+        logger.info('🎯 Ready to start training!')
 
     if data_args.use_packed_ds:
         collator = partial(

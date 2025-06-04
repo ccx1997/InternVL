@@ -59,6 +59,18 @@ def concat_pad_data_collator(features, max_item_length=None, pad_id=0):
     first = features[0]
     batch = {}
 
+    # Handle video_enc_params separately as they may contain non-tensor data
+    video_enc_params_list = []
+    for feat in features:
+        if 'video_enc_params' in feat:
+            video_enc_params_list.append(feat.pop('video_enc_params'))
+        else:
+            video_enc_params_list.append(None)
+    
+    # Process video encoder parameters if any non-None params exist
+    if any(param is not None for param in video_enc_params_list):
+        batch['video_enc_params'] = video_enc_params_list
+
     batch_lens = [feat['input_ids'].shape for feat in features]
     max_item_length = max_item_length or max(batch_lens)[0]
     for idx in range(len(features)):

@@ -1,0 +1,9 @@
+{
+  "spacer_151k":{
+    "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
+    "annotation": "/mnt/chensenda/VLNDatas/SpaceR-151k/spacer_151k_vsi_format_env_video.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 151000
+  }
+}

@@ -5,7 +5,7 @@
 # --------------------------------------------------------
 
 import warnings
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Dict
 
 import torch.distributed as dist
 import torch.utils.checkpoint
@@ -41,7 +41,7 @@ class InternVLChatModel(PreTrainedModel):
     main_input_name = 'pixel_values'
     base_model_prefix = 'language_model'
     _no_split_modules = ['InternVisionModel', 'LlamaDecoderLayer', 'InternLM2DecoderLayer',
-                         'Phi3DecoderLayer', 'Qwen2DecoderLayer']
+                         'Phi3DecoderLayer', 'Qwen2DecoderLayer', 'VideoChatFlashQwenForCausalLM']
     _supports_flash_attn_2 = True
     supports_gradient_checkpointing = True
 
@@ -93,7 +93,30 @@ class InternVLChatModel(PreTrainedModel):
             nn.Linear(llm_hidden_size, llm_hidden_size)
         )
 
+        # Initialize video encoder if enabled
+        if config.use_video_encoder:
+            from ..videochat_flash.modeling_videochat_flash import VideoChatFlashQwenForCausalLM
+            self.video_encoder = VideoChatFlashQwenForCausalLM(
+                config.video_encoder_config, 
+                latent_len=config.video_encoder_latent_len
+            )
+            
+            # Environment context MLP projector
+            video_encoder_hidden_size = config.video_encoder_config.hidden_size
+            self.env_mlp_projector = nn.Sequential(
+                nn.LayerNorm(video_encoder_hidden_size),
+                nn.Linear(video_encoder_hidden_size, llm_hidden_size),
+                nn.GELU(),
+                nn.Linear(llm_hidden_size, llm_hidden_size)
+            )
+        else:
+            self.video_encoder = None
+            self.env_mlp_projector = None
+
         self.img_context_token_id = None
+        self.env_ctx_token_id = None
+        self.env_start_token_id = None
+        self.env_end_token_id = None
         self.conv_template = get_conv_template(self.template)
         if hasattr(config, 'system_message'):
             self.system_message = config.system_message
@@ -143,6 +166,7 @@ class InternVLChatModel(PreTrainedModel):
             self,
             pixel_values: torch.FloatTensor,
             input_ids: torch.LongTensor = None,
+            video_enc_params: Optional[Dict] = None, # Parameters for VideoChatFlashQwenForCausalLM.forward
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             image_flags: Optional[torch.LongTensor] = None,
@@ -187,6 +211,18 @@ class InternVLChatModel(PreTrainedModel):
             n_token = selected.sum()
             input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds[:n_token]
             ignore_flag = True
+        
+        # Process video frames if provided
+        if video_enc_params is not None and self.video_encoder is not None:
+            env_ctx = self.extract_env_context(video_enc_params)
+        else:
+            env_ctx = None
+        # import ipdb; ipdb.set_trace()
+        
+        if env_ctx is not None:
+            env_ctx = env_ctx.reshape(-1, C)
+            selected_env_ctx = (input_ids == self.env_ctx_token_id)
+            input_embeds[selected_env_ctx] = input_embeds[selected_env_ctx] * 0.0 + env_ctx
 
         input_embeds = input_embeds.reshape(B, N, C)
 
@@ -288,6 +324,83 @@ class InternVLChatModel(PreTrainedModel):
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         vit_embeds = self.mlp1(vit_embeds)
         return vit_embeds
+
+    def extract_env_context(self, video_enc_params):
+        """
+        Extract environment context features from video frames using VideoChatFlashQwenForCausalLM.
+        
+        Args:
+            video_enc_params: Dictionary containing parameters for VideoChatFlashQwenForCausalLM.forward
+                            or list of such dictionaries for batch processing
+            
+        Returns:
+            env_features: Tensor of shape [batch_size, latent_len, hidden_size]
+        """
+        if self.video_encoder is None:
+            raise ValueError("Video encoder is not initialized. Set use_video_encoder=True in config.")
+        
+        # Handle both single dict and list of dicts (batch processing)
+        if isinstance(video_enc_params, list):
+            # Batch processing - process each non-None item
+            batch_env_features = []
+            for params in video_enc_params:
+                # import ipdb; ipdb.set_trace()
+                if params is not None:
+                    env_features = self._process_single_video_params(params)
+                    batch_env_features.append(env_features)
+                else:
+                    # Create zero features for None entries
+                    device = self.video_encoder.device if hasattr(self.video_encoder, 'device') else torch.device('cuda')
+                    zero_features = torch.zeros(1, self.config.video_encoder_latent_len, 
+                                              self.config.llm_config.hidden_size, device=device)
+                    batch_env_features.append(zero_features)
+            return torch.cat(batch_env_features, dim=0)
+        else:
+            # Single item processing
+            return self._process_single_video_params(video_enc_params)
+    
+    def _process_single_video_params(self, params):
+        """Process a single video parameter dict"""
+        if not isinstance(params, dict):
+            raise ValueError("video_enc_params should be a dictionary")
+        
+        # Extract frames and preprocess them
+        frames = params['images']
+        image_sizes = params['image_sizes']
+        
+        # import ipdb; ipdb.set_trace()
+        # Preprocess frames using video encoder's vision tower
+        # if hasattr(self.video_encoder, 'get_vision_tower'):
+        #     vision_tower = self.video_encoder.get_vision_tower()
+        #     if hasattr(vision_tower, 'image_processor'):
+        #         # Convert PIL images to tensor format expected by video encoder
+        #         processed_frames = vision_tower.image_processor.preprocess(
+        #             frames, return_tensors="pt"
+        #         )["pixel_values"]
+        #         processed_frames = processed_frames.to(self.video_encoder.device if hasattr(self.video_encoder, 'device') else torch.device('cuda'))
+        #         processed_frames = processed_frames.to(self.video_encoder.dtype if hasattr(self.video_encoder, 'dtype') else torch.bfloat16)
+        #     else:
+        #         raise ValueError("Video encoder vision tower has no image_processor")
+        # else:
+        #     raise ValueError("Video encoder has no vision tower")
+        
+        # Prepare input for video encoder forward pass
+        # Following the chat() method logic
+        encoder_inputs = {
+            'images': frames,
+            'image_sizes': image_sizes,
+            'modalities': ["video"],
+            'input_ids': params['input_ids'],  # Will be handled by video encoder
+            'attention_mask': params['attention_mask'],  # Will be handled by video encoder
+        }
+        
+        # Get latent features from video encoder
+        latent_features = self.video_encoder(**encoder_inputs)[0]
+        
+        # Project latent features to LLM hidden size
+        env_features = self.env_mlp_projector(latent_features)
+        
+        return env_features
 
     def batch_chat(self, tokenizer, pixel_values, questions, generation_config, num_patches_list=None,
                    history=None, return_history=False, IMG_START_TOKEN='<img>', IMG_END_TOKEN='</img>',
@@ -403,6 +516,7 @@ class InternVLChatModel(PreTrainedModel):
             input_ids: Optional[torch.FloatTensor] = None,
             attention_mask: Optional[torch.LongTensor] = None,
             visual_features: Optional[torch.FloatTensor] = None,
+            video_enc_params: Optional[Dict] = None,
             generation_config: Optional[GenerationConfig] = None,
             output_hidden_states: Optional[bool] = None,
             **generate_kwargs,
@@ -422,6 +536,14 @@ class InternVLChatModel(PreTrainedModel):
             selected = (input_ids == self.img_context_token_id)
             assert selected.sum() != 0
             input_embeds[selected] = vit_embeds.reshape(-1, C).to(input_embeds.device)
+
+            # Process video frames if provided
+            if video_enc_params is not None and self.video_encoder is not None:
+                env_ctx = self.extract_env_context(video_enc_params)
+                env_ctx = env_ctx.reshape(-1, C)
+                selected_env_ctx = (input_ids == self.env_ctx_token_id)
+                if selected_env_ctx.sum() > 0:
+                    input_embeds[selected_env_ctx] = input_embeds[selected_env_ctx] * 0.0 + env_ctx
 
             input_embeds = input_embeds.reshape(B, N, C)
         else:
