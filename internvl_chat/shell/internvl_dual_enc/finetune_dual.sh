@@ -1,20 +1,19 @@
 set -x
 
-GPUS=${GPUS:-1}
-BATCH_SIZE=${BATCH_SIZE:-2}
-PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
+GPUS=${GPUS:-8}
+BATCH_SIZE=${BATCH_SIZE:-128}
+PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-2}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
-CUDA_VISIBLE_DEVICES=7
+
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-export MASTER_PORT=34229
+export MASTER_PORT=34234
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
-export NCCL_DEBUG=WARN
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-pretrained_model_path='/mnt/models/InternVL3-8B'
-OUTPUT_DIR='work_dirs/internvl_chat_v2_5/internvl2_5_8b_dynamic_res_2nd_finetune_full_video'
+pretrained_model_path='/mnt/models/InternVL3-2B'
+vision_path2='/mnt/models/VGGT-1B/model.pt'
+OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_stage1'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
@@ -33,10 +32,11 @@ torchrun \
   --master_port=${MASTER_PORT} \
   internvl/train/internvl_chat_finetune.py \
   --model_name_or_path ${pretrained_model_path} \
+  --vision_path2 ${vision_path2} \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/vsi_meta.json" \
+  --meta_path "./shell/data/vsi_meta_env.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \
@@ -45,8 +45,10 @@ torchrun \
   --freeze_llm True \
   --freeze_mlp False \
   --freeze_backbone True \
+  --freeze_mlp2 False \
+  --freeze_vision2 True \
   --vision_select_layer -1 \
-  --dataloader_num_workers 0 \
+  --dataloader_num_workers 4 \
   --bf16 True \
   --num_train_epochs 1 \
   --per_device_train_batch_size ${PER_DEVICE_BATCH_SIZE} \
@@ -56,11 +58,11 @@ torchrun \
   --save_steps 200 \
   --save_total_limit 1 \
   --learning_rate 4e-5 \
-  --weight_decay 0.05 \
+  --weight_decay 0.01 \
   --warmup_ratio 0.03 \
   --lr_scheduler_type "cosine" \
   --logging_steps 1 \
-  --max_seq_length 8192 \
+  --max_seq_length 16384 \
   --do_train True \
   --grad_checkpoint True \
   --group_by_length True \

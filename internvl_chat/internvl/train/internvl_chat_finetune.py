@@ -56,6 +56,9 @@ from internvl.train.dataset import (ConcatDataset, TCSLoader,
                                     preprocess_internvl2_5, preprocess_mpt,
                                     preprocess_phi3)
 from internvl.train.dataset_packed import PackedDataset, packed_collate_fn
+from internvl.train.vggt_preprocess import load_and_preprocess_images as preprocess_images2
+from internvl.train.load_vggt_params import load_vggt_params_in_internvl
+
 from PIL import Image, ImageFile, PngImagePlugin, UnidentifiedImageError
 from torch.utils.data import Dataset
 from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
@@ -153,6 +156,10 @@ class ModelArguments:
         default=None,
         metadata={'help': 'Path to a pretrained model (local or from huggingface.co/models).'}
     )
+    vision_path2: Optional[str] = field(
+        default=None,
+        metadata={'help': 'Path to a pretrained model (local or from huggingface.co/models).'}
+    )
     llm_path: Optional[str] = field(
         default=None,
         metadata={'help': 'Path to a pretrained model (local or from huggingface.co/models).'}
@@ -176,6 +183,14 @@ class ModelArguments:
     unfreeze_vit_layers: int = field(
         default=0,
         metadata={'help': 'Specify the number of ViT layers to unfreeze. Default is 0.'},
+    )
+    freeze_mlp2: bool = field(
+        default=False,
+        metadata={'help': 'Set to True to freeze the MLP2. Default is False.'},
+    )
+    freeze_vision2: bool = field(
+        default=True,
+        metadata={'help': 'Set to False to unfreeze the vision2. Default is True.'},
     )
     vision_select_layer: int = field(
         default=-1,
@@ -414,6 +429,8 @@ class LazySupervisedDataset(Dataset):
         self.max_dynamic_patch = max_dynamic_patch
         self.normalize_type = normalize_type
 
+        self.num_img2_tokens = 13 * 13 + 1 # patch tokens and 1 camera token
+
         # If the precomputed length does not exist, roughly estimate the length of
         # each sample to improve the efficiency of group_by_length.
         if self.group_by_length:
@@ -449,7 +466,7 @@ class LazySupervisedDataset(Dataset):
         elif self.template_name == 'phi3-chat':
             preprocess_function = preprocess_phi3
         elif self.template_name == 'internvl2_5':
-            preprocess_function = preprocess_internvl2_5
+            preprocess_function = preprocess_internvl2_5 # adapt to dual image encoder
         else:
             preprocess_function = preprocess
         return preprocess_function
@@ -458,7 +475,16 @@ class LazySupervisedDataset(Dataset):
         # Load the image using tcs_loader if available, otherwise use PIL
         if self.tcs_loader is not None and 's3://' in image_path:
             return self.tcs_loader(image_path)
-        return Image.open(image_path).convert('RGB')
+        img = Image.open(image_path)
+        # If there's an alpha channel, blend onto white background:
+        if img.mode == "RGBA":
+            # Create white background
+            background = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            # Alpha composite onto the white background
+            img = Image.alpha_composite(background, img)
+        # Now convert to "RGB" (this step assigns white for transparent areas)
+        img = img.convert("RGB")
+        return img
 
     def get_image_path(self, image_path):
         if image_path.startswith('s3://'):  # for ceph
@@ -477,95 +503,66 @@ class LazySupervisedDataset(Dataset):
         # Build transformation function
         transform = self.get_transform()
 
-        # Ensure the first conversation contains an image placeholder
-        if '<image>' not in data_item['conversations'][0]['value']:
+        image_paths = data_item['image']
+        is_multi_image = isinstance(image_paths, list)
+
+        if not is_multi_image:
+            image_paths = [image_paths]
+
+        num_images = len(image_paths)
+        conversation_text = ''.join(conv['value'] for conv in data_item['conversations'])
+        num_image_placeholders = conversation_text.count('<image>')
+
+        if num_images == 1 and num_image_placeholders == 0:
+            # For single-image cases, automatically add <image> if not present
             data_item['conversations'][0]['value'] = '<image>\n' + data_item['conversations'][0]['value']
-
-        # Merge the image path
-        image_path = self.get_image_path(data_item['image'])
-
-        # Load the image using tcs_loader if available, otherwise use PIL
-        image = self.load_image(image_path)
-
-        if self.dynamic_image_size:  # If dynamic image size is enabled, preprocess the image dynamically
-            images = dynamic_preprocess(image, min_num=self.min_dynamic_patch, max_num=self.max_dynamic_patch,
-                                        image_size=self.image_size, use_thumbnail=self.use_thumbnail)
-        else:  # Otherwise, use the original image as a single patch
-            images = [image]
-
-        # Apply the transformation to each image and stack the results into a tensor
-        pixel_values = [transform(image) for image in images]
-        pixel_values = torch.stack(pixel_values)
-
-        # Ensure that there is only one patch if dynamic image size is not enabled
-        num_patches = pixel_values.size(0)
-        if not self.dynamic_image_size:
-            assert num_patches == 1, f'The number of patches should be 1, but got {num_patches}.'
-
-        # Select the appropriate preprocessing function based on the template name
-        preprocess_function = self.get_preprocess_function()
-
-        # Preprocess the conversations and generate the return dictionary
-        ret = preprocess_function(self.template_name, [deepcopy(data_item['conversations'])],
-                                  self.tokenizer, [self.num_image_token * num_patches],
-                                  group_by_length=self.group_by_length,
-                                  use_packed_ds=self.use_packed_ds, ds_name=self.ds_name)
-
-        # Calculate position_ids for packed dataset
-        position_ids = ret['attention_mask'].long().cumsum(-1) - 1
-        position_ids.masked_fill_(ret['attention_mask'] == 0, 1)
-        image_end_token_id = self.tokenizer.convert_tokens_to_ids(IMG_END_TOKEN)
-        assert (ret['input_ids'][0] == image_end_token_id).sum() == 1, f'image tokens are truncated, this dataset is {self.ds_name}'
-
-        # Create the final return dictionary
-        ret = dict(
-            input_ids=ret['input_ids'][0],
-            labels=ret['labels'][0],
-            attention_mask=ret['attention_mask'][0],
-            position_ids=position_ids[0],
-            pixel_values=pixel_values,
-            image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
-        )
-        return ret
-
-    def multi_modal_multi_image_get_item(self, data_item):
-        # Build transformation function
-        transform = self.get_transform()
+        elif num_image_placeholders != num_images:
+            # For other cases, the number of <image> placeholders must match the number of images
+            raise ValueError(f'Number of <image> placeholders ({num_image_placeholders}) does not match '
+                             f'the number of images ({num_images}) in dataset {self.ds_name}.')
 
         images, num_tiles = [], []
-        num_image = len(data_item['image'])
-        for image_path in data_item['image']:
+        images2 = [] # for the new image encoder in the dual-vit system
+
+        for image_path in image_paths:
             # Merge the image path
             image_path = self.get_image_path(image_path)
             # Load the image using tcs_loader if available, otherwise use PIL
             image = self.load_image(image_path)
             if self.dynamic_image_size:  # If dynamic image size is enabled, preprocess the image dynamically
-                image = dynamic_preprocess(image, min_num=self.min_dynamic_patch,
-                                           max_num=max(1, self.max_dynamic_patch // num_image),
-                                           image_size=self.image_size, use_thumbnail=self.use_thumbnail)
-                images += image
-                num_tiles.append(len(image))
+                if is_multi_image:
+                    max_num = max(1, self.max_dynamic_patch // num_images)
+                else:
+                    max_num = self.max_dynamic_patch
+                processed_images = dynamic_preprocess(image, min_num=self.min_dynamic_patch,
+                                                    max_num=max_num,
+                                                    image_size=self.image_size, use_thumbnail=self.use_thumbnail)
+                images.extend(processed_images)
+                num_tiles.append(len(processed_images))
             else:  # Otherwise, use the original image as a single patch
                 images.append(image)
                 num_tiles.append(1)
+            images2.append(image)
         pixel_values = [transform(image) for image in images]
         pixel_values = torch.stack(pixel_values)
         num_patches = pixel_values.size(0)
+        # process for new image encoder
+        pixel_values2 = preprocess_images2(images2, mode="pad") # [K, 3, H, W]
 
         # Select the appropriate preprocessing function based on the template name
         preprocess_function = self.get_preprocess_function()
 
         # Preprocess the conversations and generate the return dictionary
-        num_image_tokens = [self.num_image_token * num_tile for num_tile in num_tiles]
+        num_image_tokens = [self.num_image_token * num_tile + self.num_img2_tokens * len(images2) for num_tile in num_tiles]
         ret = preprocess_function(self.template_name, [deepcopy(data_item['conversations'])],
                                   self.tokenizer, num_image_tokens, group_by_length=self.group_by_length,
-                                  use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_image)
+                                  use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_images)
 
         # Calculate position_ids for packed dataset
         position_ids = ret['attention_mask'].long().cumsum(-1) - 1
         position_ids.masked_fill_(ret['attention_mask'] == 0, 1)
         image_end_token_id = self.tokenizer.convert_tokens_to_ids(IMG_END_TOKEN)
-        assert (ret['input_ids'][0] == image_end_token_id).sum() == num_image, f'image tokens are truncated, this dataset is {self.ds_name}'
+        assert (ret['input_ids'][0] == image_end_token_id).sum() == num_images, f'image tokens are truncated, this dataset is {self.ds_name}'
 
         # Create the final return dictionary
         ret = dict(
@@ -574,6 +571,7 @@ class LazySupervisedDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
+            pixel_values2=pixel_values2,
             image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
         )
         return ret
@@ -693,6 +691,8 @@ class LazySupervisedDataset(Dataset):
         # Ensure the first conversation contains a video placeholder
         if '<video>' not in data_item['conversations'][0]['value']:
             data_item['conversations'][0]['value'] = '<video>\n' + data_item['conversations'][0]['value']
+        # make sure there is only 1 placeholder.
+        assert data_item['conversations'][0]['value'].count('<video>') == 1
 
         # Get the video file path
         video_file = data_item['video']
@@ -709,7 +709,7 @@ class LazySupervisedDataset(Dataset):
                 sample=self.sampling_method,
                 clip=data_item.get('clip', None))
         else:
-            image_list = self.load_video(video_path)
+            image_list = self.load_video(video_path) # No dynamic spliting
 
         # Generate special tokens for each video frame
         special_tokens = '\n'.join(['Frame-{}: <image>'.format(i + 1) for i in range(len(image_list))])
@@ -720,12 +720,14 @@ class LazySupervisedDataset(Dataset):
         pixel_values = [transform(image) for image in image_list]
         pixel_values = torch.stack(pixel_values)
         num_patches = pixel_values.size(0)
+        # process for new image encoder
+        pixel_values2 = preprocess_images2(image_list, mode="pad") # [K, 3, H, W]
 
         # Select the appropriate preprocessing function based on the template name
         preprocess_function = self.get_preprocess_function()
 
         # Preprocess the conversations and generate the return dictionary
-        num_image_tokens = [self.num_image_token] * num_patches
+        num_image_tokens = [self.num_image_token + self.num_img2_tokens] * num_patches
         ret = preprocess_function(self.template_name, [deepcopy(data_item['conversations'])],
                                   self.tokenizer, num_image_tokens, group_by_length=self.group_by_length,
                                   use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_patches)
@@ -741,6 +743,7 @@ class LazySupervisedDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
+            pixel_values2=pixel_values2,
             image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
         )
         return ret
@@ -814,10 +817,7 @@ class LazySupervisedDataset(Dataset):
                 # conversations = data_item['conversations']
                 # check_conversations_repetition(conversations, repeat_threshold=0.4, ngram=10)
                 if 'image' in data_item and len(data_item['image']) != 0:
-                    if type(data_item['image']) == list:
-                        ret = self.multi_modal_multi_image_get_item(data_item)
-                    else:
-                        ret = self.multi_modal_get_item(data_item)
+                    ret = self.multi_modal_get_item(data_item)
                 elif 'video' in data_item and data_item['video'] is not None and data_item['video'] != '':
                     ret = self.video_get_item(data_item)
                 else:
@@ -1113,6 +1113,10 @@ def main():
         model = InternVLChatModel(internvl_chat_config, vision_model, llm)
     model.img_context_token_id = img_context_token_id
 
+    if model_args.vision_path2 is not None:
+        logger.info('Loading VGGT Encoder...')
+        load_vggt_params_in_internvl(model, model_args.vision_path2)
+
     assert model.config.downsample_ratio == data_args.down_sample_ratio
 
     if model_args.mlp_path is not None:
@@ -1184,6 +1188,14 @@ def main():
 
     if model_args.freeze_mlp:
         _freeze_params(model.mlp1)
+
+    if model_args.freeze_mlp2:
+        _freeze_params(model.mlp2_patch)
+        _freeze_params(model.mlp2_camera)
+        _freeze_params(model.downsample2)
+
+    if model_args.freeze_vision2:
+        _freeze_params(model.vision_model2)
 
     if model_args.unfreeze_vit_layers != 0:
         layers = model.vision_model.encoder.layers[model_args.unfreeze_vit_layers:]

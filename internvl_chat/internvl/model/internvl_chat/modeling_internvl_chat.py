@@ -22,8 +22,11 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
 
+from timm.models.layers import trunc_normal_
+
 from .configuration_internvl_chat import InternVLChatConfig
 from .modeling_intern_vit import InternVisionModel, has_flash_attn
+from .aggregator import Aggregator as VGGTEncoder
 
 logger = logging.get_logger(__name__)
 
@@ -69,6 +72,9 @@ class InternVLChatModel(PreTrainedModel):
             self.vision_model = vision_model
         else:
             self.vision_model = InternVisionModel(config.vision_config)
+        # another image encoder
+        embed_dim2=1024
+        self.vision_model2 = VGGTEncoder(embed_dim=embed_dim2, img_size=518, patch_size=14)
         if language_model is not None:
             self.language_model = language_model
         else:
@@ -92,6 +98,19 @@ class InternVLChatModel(PreTrainedModel):
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size)
         )
+        self.downsample2 = nn.Conv2d(embed_dim2 * 2, embed_dim2 * 4, kernel_size=3, stride=3, padding=1)
+        self.mlp2_patch = nn.Sequential(
+            nn.LayerNorm(embed_dim2 * 4),
+            nn.Linear(embed_dim2 * 4, llm_hidden_size),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size)
+        )
+        self.mlp2_camera = nn.Sequential(
+            nn.LayerNorm(embed_dim2 * 2),
+            nn.Linear(embed_dim2 * 2, llm_hidden_size),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size)
+        )
 
         self.img_context_token_id = None
         self.conv_template = get_conv_template(self.template)
@@ -106,6 +125,29 @@ class InternVLChatModel(PreTrainedModel):
 
         if config.use_llm_lora:
             self.wrap_llm_lora(r=config.use_llm_lora, lora_alpha=2 * config.use_llm_lora)
+
+        self._initialize_vision_projector()
+
+    def _initialize_vision_projector(self):
+        def _initialize_weights(m):
+            # if isinstance(m, nn.Linear):
+            #     nn.init.normal_(m.weight, std=1 / math.sqrt(m.weight.size(1)))
+            #     if m.bias is not None:
+            #         nn.init.constant_(m.bias, 0)
+            # elif isinstance(m, nn.Conv2d):
+            #     fan_in = m.in_channels * m.kernel_size[0] * m.kernel_size[1]
+            #     std = 1 / math.sqrt(fan_in)
+            #     nn.init.normal_(m.weight, mean=0.0, std=std)
+            #     if m.bias is not None:
+            #         nn.init.constant_(m.bias, 0)
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                trunc_normal_(m.weight, std=.01, a=-1.0, b=1.0)
+                if m.bias is not None:
+                    m.bias.data.fill_(0)
+
+        self.downsample2.apply(_initialize_weights)
+        self.mlp2_patch.apply(_initialize_weights)
+        self.mlp2_camera.apply(_initialize_weights)
 
     def wrap_backbone_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
         lora_config = LoraConfig(
@@ -142,8 +184,10 @@ class InternVLChatModel(PreTrainedModel):
     def forward(
             self,
             pixel_values: torch.FloatTensor,
+            pixel_values2: torch.FloatTensor,
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
+            attention_mask2: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             image_flags: Optional[torch.LongTensor] = None,
             past_key_values: Optional[List[torch.FloatTensor]] = None,
@@ -163,7 +207,10 @@ class InternVLChatModel(PreTrainedModel):
 
         vit_embeds = self.extract_feature(pixel_values)
         vit_embeds = vit_embeds[image_flags == 1]
-        vit_batch_size = pixel_values.shape[0]
+        # for encoder2
+        img_embeds2 = self.extract_feature2(pixel_values2, attention_mask2)
+        # concat the 2 embeddings
+        vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
 
         B, N, C = input_embeds.shape
         input_embeds = input_embeds.reshape(B * N, C)
@@ -288,6 +335,28 @@ class InternVLChatModel(PreTrainedModel):
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         vit_embeds = self.mlp1(vit_embeds)
         return vit_embeds
+    
+    def extract_feature2(self, pixel_values2, attention_mask2):
+        # extract features by a parallel encoder
+        img_embeds_list, patch_start_idx = self.vision_model2(pixel_values2, attention_mask=attention_mask2)
+        camera_pose_features = img_embeds_list[-1][:, :, 0:1] # [B, S, 1, C]
+        img_embeds2 = img_embeds_list[-1][:, :, patch_start_idx:] # [B, S, P, C]
+        # filter padding frame features
+        B, S, P, C = img_embeds2.shape
+        camera_pose_features = camera_pose_features.reshape(B*S, 1, C)[attention_mask2.flatten()] # [N, 1, C], N is the number of valid frames
+        img_embeds2 = img_embeds2.reshape(B*S, P, C)[attention_mask2.flatten()] # [N, P, C]
+        # downsample
+        side = int(P ** 0.5)
+        img_embeds2 = img_embeds2.reshape(-1, side, side, C).permute(0, 3, 1, 2) # [N, C, side, side]
+        img_embeds2 = self.downsample2(img_embeds2)
+        # import ipdb; ipdb.set_trace()
+        img_embeds2 = img_embeds2.flatten(2).permute(0, 2, 1) # [N, T, C*3], T=side*side//9
+        # project
+        img_embeds2 = self.mlp2_patch(img_embeds2)
+        camera_pose_features = self.mlp2_camera(camera_pose_features)
+        # concat
+        img_embeds2 = torch.cat([camera_pose_features, img_embeds2], dim=1) # [N, 1+T, E]
+        return img_embeds2
 
     def batch_chat(self, tokenizer, pixel_values, questions, generation_config, num_patches_list=None,
                    history=None, return_history=False, IMG_START_TOKEN='<img>', IMG_END_TOKEN='</img>',

@@ -6,6 +6,7 @@
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 IGNORE_INDEX = -100
 
@@ -98,7 +99,7 @@ def concat_pad_data_collator(features, max_item_length=None, pad_id=0):
     # Handling of all other possible keys.
     # Again, we will use the first element to figure out which key/values are not None for this model.
     for k, v in first.items():
-        if k not in ('label', 'label_ids', 'pixel_values', 'image_flags') and \
+        if k not in ('label', 'label_ids', 'pixel_values', 'pixel_values2', 'image_flags') and \
                 v is not None and not isinstance(v, str):
             if isinstance(v, torch.Tensor):
                 batch[k] = torch.stack([f[k] for f in features])
@@ -113,6 +114,31 @@ def concat_pad_data_collator(features, max_item_length=None, pad_id=0):
                 batch[k] = torch.concat(np.stack([f[k] for f in features]))
             else:
                 batch[k] = torch.concat([f[k] for f in features])
+        if k == 'pixel_values2':
+            # padding and stack
+            # Get max sequence length across all features
+            max_seq_len = max(f[k].size(0) for f in features)
+
+            # For each feature, pad to max_seq_len
+            padded_features = []
+            attention_masks = []
+            for f in features:
+                curr_seq_len = f[k].size(0)
+                mask = torch.zeros(max_seq_len, dtype=torch.bool)
+                mask[:curr_seq_len] = True
+                attention_masks.append(mask)
+
+                if curr_seq_len < max_seq_len:
+                    # Pad first dimension to max_seq_len
+                    padding = (0, 0, 0, 0, 0, 0, 0, max_seq_len - curr_seq_len)
+                    padded = F.pad(f[k], padding)
+                else:
+                    padded = f[k]
+                padded_features.append(padded)
+
+            # Stack all padded features
+            batch[k] = torch.stack(padded_features) # [B, L, C, H, W]
+            batch['attention_mask2'] = torch.stack(attention_masks) # [B, L]
     return batch
 
 
