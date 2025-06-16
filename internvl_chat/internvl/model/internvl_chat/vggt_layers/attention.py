@@ -64,8 +64,8 @@ class Attention(nn.Module):
             k = self.rope(k, pos)
 
         if mask is not None:
-            # The mask has shape (B, N). It needs to be broadcastable to (B, N, N).
-            mask = mask.unsqueeze(1)
+            # The mask has shape (B, N). It needs to be broadcastable with shape (B, 1, N, N).
+            mask = mask.unsqueeze(-2).expand(B, N, N).unsqueeze(1) # (B, 1, N, N)
 
         if self.fused_attn:
             x = F.scaled_dot_product_attention(

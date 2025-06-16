@@ -1216,6 +1216,19 @@ def main():
                 params_requires_grad.append(name)
         logger.info(f'Trainable parameters: {params_requires_grad}')
 
+    # Save model parameter information to params.txt
+    params_file_path = os.path.join(training_args.output_dir, 'params.txt')
+    os.makedirs(training_args.output_dir, exist_ok=True)
+
+    with open(params_file_path, 'w', encoding='utf-8') as f:
+        f.write("Parameter_Name\tTensor_Size\tRequires_Grad\n")  # Header
+        for name, param in model.named_parameters():
+            tensor_size = list(param.shape)
+            requires_grad = str(param.requires_grad)
+            f.write(f"{name}\t{tensor_size}\t{requires_grad}\n")
+    
+    logger.info(f'Model parameter information saved to: {params_file_path}')
+
     # set seed for torch dataloaders
     set_seed(training_args.seed)
 
