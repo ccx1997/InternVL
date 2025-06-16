@@ -26,7 +26,7 @@ try:
     import orjson as json
 except:
     import json
-
+import json as jsonprocess
 import torch
 import torch.distributed as dist
 import transformers
@@ -403,17 +403,81 @@ class LazySupervisedDataset(Dataset):
         self._state_dict = {}
 
         logger.info('Formatting inputs...Skip in lazy mode')
-        assert meta['annotation'].endswith('jsonl'), f'annotation must be jsonl, but got {meta["annotation"]}'
+        self.annotation_dir = os.path.join(meta['data_dir'], meta['annotation'])
+        assert self.annotation_dir.endswith('jsonl') or self.annotation_dir.endswith('json'), f'annotation must be jsonl, but got {self.annotation_dir}'
+        if self.annotation_dir.endswith('json'):
+            # Handle JSON format (array of objects)
+            with open(self.annotation_dir, 'r') as f:
+                json_data = jsonprocess.load(f)
+            # Convert each object back to JSON string to maintain compatibility with existing logic
+            self.raw_data = [jsonprocess.dumps(item, ensure_ascii=False) for item in json_data]
+        else:
+            # Handle JSONL format (one JSON object per line)
+            with open(self.annotation_dir, 'r') as f:
+                self.raw_data = f.readlines()
 
-        with open(meta['annotation'], 'r') as f:
-            self.raw_data = f.readlines()
-            if repeat_time < 1:
-                # If repeat_time is less than 1, select a portion of the data
-                self.raw_data = self.raw_data[:int(len(self.raw_data) * repeat_time)]
-            if repeat_time > 1:
-                assert isinstance(repeat_time, int)
-                # Repeat the list if repeat_time is greater than 1
-                self.raw_data = self.raw_data * repeat_time
+        # Format conversion: convert from original format to target format
+        converted_data = []
+        for idx, data_line in enumerate(self.raw_data):
+            try:
+                data_item = json.loads(data_line)
+                
+                # Check if format conversion is needed
+                needs_conversion = False
+                if 'conversations' in data_item and len(data_item['conversations']) > 0:
+                    first_conv = data_item['conversations'][0]
+                    # Check if it's using the old format (role/content) instead of new format (from/value)
+                    if 'role' in first_conv and 'content' in first_conv:
+                        needs_conversion = True
+                    elif 'from' not in first_conv or 'value' not in first_conv:
+                        needs_conversion = True
+                
+                if not needs_conversion:
+                    # Keep original data if no conversion needed
+                    converted_data.append(data_line)
+                    continue
+                
+                # Create new format
+                converted_item = {
+                    "id": idx,
+                    "type": "free-form"
+                }
+                
+                # Handle image/video field
+                if 'image' in data_item:
+                    converted_item['image'] = data_item['image']
+                elif 'video' in data_item:
+                    converted_item['video'] = data_item['video']
+                
+                # Convert conversations format
+                if 'conversations' in data_item:
+                    converted_conversations = []
+                    for conv in data_item['conversations']:
+                        converted_conv = {
+                            "from": "human" if conv.get('role') == 'user' else "gpt",
+                            "value": conv.get('content', conv.get('value', ''))
+                        }
+                        converted_conversations.append(converted_conv)
+                    converted_item['conversations'] = converted_conversations
+                
+                # Convert back to JSON string
+                converted_data.append(jsonprocess.dumps(converted_item, ensure_ascii=False))
+                
+            except Exception as e:
+                logger.warning(f'Failed to convert data item {idx}: {e}')
+                # Keep original data if conversion fails
+                converted_data.append(data_line)
+        
+        self.raw_data = converted_data
+
+        # Apply repeat_time logic to raw_data
+        if repeat_time < 1:
+            # If repeat_time is less than 1, select a portion of the data
+            self.raw_data = self.raw_data[:int(len(self.raw_data) * repeat_time)]
+        if repeat_time > 1:
+            assert isinstance(repeat_time, int)
+            # Repeat the list if repeat_time is greater than 1
+            self.raw_data = self.raw_data * repeat_time
 
         self.rng = np.random.default_rng(seed=random_seed)
         if self.force_shuffle:
@@ -437,8 +501,12 @@ class LazySupervisedDataset(Dataset):
             self.conv2length = {}  # Using a dictionary to speed up token length calculation
             self.length = []
             for data_item in self.raw_data:
+                # print("data_item:", data_item)
                 data_item = json.loads(data_item)
+                # print("data_item:", data_item)
+                
                 if 'length' in data_item:
+                    print("length in data_item:", data_item['length'])
                     token_length = data_item['length']  # Use precomputed length if available
                 else:
                     # Compute token length using the tokenizer
@@ -831,7 +899,7 @@ class LazySupervisedDataset(Dataset):
                 data_item = json.loads(self.raw_data[i])
                 if 'image' in data_item:
                     if type(data_item['image']) == list:
-                        images = [self.root + item for item in data_item['image']]
+                        images = [os.path.join(self.root, item) for item in data_item['image']]
                         print(f'Failed to load image: {images}, the dataset is: {self.ds_name}')
                     else:
                         if data_item['image'].startswith('s3://'):

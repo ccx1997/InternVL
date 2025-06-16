@@ -7,7 +7,7 @@ GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 CUDA_VISIBLE_DEVICES=1
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-export MASTER_PORT=34229
+export MASTER_PORT=34019
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 export NCCL_DEBUG=WARN
@@ -33,7 +33,7 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/vsi_meta.json" \
+  --meta_path "./shell/data/vsi_meta_test.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \
