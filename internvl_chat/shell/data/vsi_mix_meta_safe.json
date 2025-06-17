@@ -2,6 +2,7 @@
   "spacer_151k":{
     "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
     "annotation": "/mnt/chensenda/VLNDatas/SpaceR-151k/spacer_151k_vsi_format.jsonl",
+    "data_dir":"",
     "data_augment": false,
     "repeat_time": 1,
     "length": 151000
@@ -85,5 +86,45 @@
     "data_augment": false,
     "repeat_time": 1,
     "length": 14366
+  },
+  "tallyqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_tallyqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 19705
+  },
+  "clevr": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_clevr.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 55913
+  },
+  "textvqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_textvqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 11002
+  },
+  "st_vqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_st_vqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 3446
+  },
+  "infographic_vqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_infographic_vqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 2120
   }
 }

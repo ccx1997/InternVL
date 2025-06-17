@@ -2,7 +2,7 @@ set -x
 
 GPUS=${GPUS:-1}
 BATCH_SIZE=${BATCH_SIZE:-2}
-PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-2}
+PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 CUDA_VISIBLE_DEVICES=5
 
@@ -59,7 +59,8 @@ torchrun \
   --warmup_ratio 0.03 \
   --lr_scheduler_type "cosine" \
   --logging_steps 1 \
-  --max_seq_length 16384 \
+  --max_num_frame 16 \
+  --max_seq_length 8192 \
   --do_train True \
   --grad_checkpoint True \
   --group_by_length True \

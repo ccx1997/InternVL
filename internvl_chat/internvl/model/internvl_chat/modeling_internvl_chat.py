@@ -232,7 +232,8 @@ class InternVLChatModel(PreTrainedModel):
                         )
                         idx_v1 += nt
                         idx_v2 += 1
-                vit_embeds = torch.cat(vision_embeddings, dim=0)
+                if len(vision_embeddings) > 0:
+                    vit_embeds = torch.cat(vision_embeddings, dim=0)
 
         input_embeds = input_embeds.reshape(B * N, C)
 

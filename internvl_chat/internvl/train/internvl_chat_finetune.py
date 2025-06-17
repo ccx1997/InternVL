@@ -886,9 +886,15 @@ class LazySupervisedDataset(Dataset):
                 i = i % len(self.raw_data)
 
         try_cnt, max_try = 0, 10
+        original_i = i
         while True:
             if try_cnt > max_try:
-                raise StopIteration
+                raise RuntimeError(
+                    f'Failed to load a valid sample after {max_try} attempts, '
+                    f'starting from index {original_i} in dataset {self.ds_name}'
+                )
+
+            data_item = None
             try:
                 data_item = json.loads(self.raw_data[i])
                 # conversations = data_item['conversations']
@@ -902,23 +908,27 @@ class LazySupervisedDataset(Dataset):
                 break
             except Exception as e:
                 try_cnt += 1
-                print(e, self.ds_name, flush=True)
-                if not isinstance(e, (UnidentifiedImageError, FileNotFoundError)):
-                    traceback.print_exc()
-                data_item = json.loads(self.raw_data[i])
-                if 'image' in data_item:
-                    if type(data_item['image']) == list:
-                        images = [os.path.join(self.root, item) for item in data_item['image']]
-                        print(f'Failed to load image: {images}, the dataset is: {self.ds_name}')
-                    else:
-                        if data_item['image'].startswith('s3://'):
-                            data_path = self.root + data_item['image']
+                print(f"Error processing index {i} in dataset '{self.ds_name}': {e}", flush=True)
+
+                # If JSON was parsed, we can print the file path for debugging.
+                if data_item is not None:
+                    if 'image' in data_item:
+                        if type(data_item['image']) == list:
+                            images = [os.path.join(self.root, item) for item in data_item['image']]
+                            print(f"--> Offending image paths: {images}", flush=True)
                         else:
-                            data_path = os.path.join(self.root, data_item['image'])
-                        print(f'Failed to load image: {data_path}, the dataset is: {self.ds_name}')
-                elif 'video' in data_item:
-                    data_path = os.path.join(self.root, data_item['video'])
-                    print(f'Failed to load video: {data_path}, the dataset is: {self.ds_name}')
+                            path = data_item['image']
+                            if not path.startswith('s3://'):
+                                path = os.path.join(self.root, path)
+                            print(f"--> Offending image path: {path}", flush=True)
+                    elif 'video' in data_item:
+                        path = os.path.join(self.root, data_item['video'])
+                        print(f"--> Offending video path: {path}", flush=True)
+
+                # We only want to see the full traceback for unexpected errors.
+                if not isinstance(e, (UnidentifiedImageError, FileNotFoundError, json.JSONDecodeError)):
+                    traceback.print_exc()
+
                 i = random.randint(0, len(self.raw_data) - 1)
         return ret
 
