@@ -1,7 +1,7 @@
 set -x
 
-CUDA_VISIBLE_DEVICES=0,1,2,3
-GPUS=${GPUS:-4}
+# CUDA_VISIBLE_DEVICES=0,1,2,3
+GPUS=${GPUS:-8}
 BATCH_SIZE=${BATCH_SIZE:-128}
 PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-2}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
@@ -14,15 +14,15 @@ export LAUNCHER=pytorch
 
 pretrained_model_path='/mnt/models/InternVL3-2B'
 vision_path2='/mnt/models/VGGT-1B/model.pt'
-OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1_safe'
+OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
 fi
 
-# number of gpus: 4
+# number of gpus: 8
 # batch size per gpu: 2
-# gradient accumulation steps: 16
+# gradient accumulation steps: 8
 # total batch size: 128
 # epoch: 1
 torchrun \
@@ -37,10 +37,10 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/data4debug.json" \
+  --meta_path "./shell/data/vsi_mix_meta_s1.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
-  --max_dynamic_patch 6 \
+  --max_dynamic_patch 4 \
   --down_sample_ratio 0.5 \
   --drop_path_rate 0.1 \
   --freeze_llm True \
@@ -49,7 +49,7 @@ torchrun \
   --freeze_mlp2 False \
   --freeze_vision2 True \
   --vision_select_layer -1 \
-  --dataloader_num_workers 0 \
+  --dataloader_num_workers 4 \
   --bf16 True \
   --num_train_epochs 1 \
   --per_device_train_batch_size ${PER_DEVICE_BATCH_SIZE} \
@@ -64,7 +64,7 @@ torchrun \
   --lr_scheduler_type "cosine" \
   --logging_steps 1 \
   --max_num_frame 16 \
-  --max_seq_length 8192 \
+  --max_seq_length 10000 \
   --do_train True \
   --grad_checkpoint True \
   --group_by_length True \

@@ -1,5 +1,13 @@
 {
-  "spacer_151k":{
+  "Multi-SpatialMLLM": {
+    "root": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/data/scannet/posed_images",
+    "annotation": "multispatialmllm_train.jsonl",
+    "data_dir": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/training_data/camera_movement/v1_0",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 750000
+  },
+  "spacer_151k": {
     "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
     "annotation": "/mnt/chensenda/VLNDatas/SpaceR-151k/spacer_151k_vsi_format.jsonl",
     "data_dir":"",
@@ -12,7 +20,7 @@
     "annotation": "/mnt/chengchangxu/data/Objects365/objects365_train_450k.json",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 0.2,
+    "repeat_time": 1,
     "length": 450000
   },
   "boxcotrd": {
@@ -63,6 +71,14 @@
     "repeat_time": 1,
     "length": 131153
   },
+  "gqa_balanced": {
+    "root": "/mnt/liuyi/datasets/GQA/images",
+    "annotation": "/mnt/liuyi/datasets/GQA/gqa_balanced.jsonl",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 268616
+  },
   "synth_clock": {
     "root": "/mnt/chengchangxu/data/clocks/images",
     "annotation": "/mnt/chengchangxu/data/clocks/clocks_train.json",
@@ -70,6 +86,14 @@
     "data_augment": false,
     "repeat_time": 1,
     "length": 6000
+  },
+  "MMInstruct-GPT4V_sampled": {
+    "root": "/mnt/liuyi/datasets/MMInstruct-GPT4V/images",
+    "annotation": "/mnt/chengchangxu/data/MMInstruct-GPT4V_filter_zh_222269.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 222266
   },
   "aokvqa": {
     "root": "/mnt/chengchangxu/projects/data_factory",
@@ -119,12 +143,12 @@
     "repeat_time": 1,
     "length": 3446
   },
-  "infographic_vqa": {
+  "visualmrc": {
     "root": "/mnt/chengchangxu/projects/data_factory",
-    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_infographic_vqa.json",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_visualmrc.json",
     "data_dir": "",
     "data_augment": false,
     "repeat_time": 1,
-    "length": 2120
+    "length": 3030
   }
 }

@@ -15,7 +15,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 pretrained_model_path='/mnt/models/InternVL3-2B'
 vision_path2='/mnt/models/VGGT-1B/model.pt'
-OUTPUT_DIR='work_dirs/internvl_chat_v2_5/internvl2_5_2b_tmp'
+OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl2_5_2b_debug'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
