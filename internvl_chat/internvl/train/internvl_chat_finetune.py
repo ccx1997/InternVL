@@ -446,6 +446,8 @@ class LazySupervisedDataset(Dataset):
                 # Handle image/video field
                 if 'image' in data_item:
                     converted_item['image'] = data_item['image']
+                elif 'src_image' in data_item:
+                    converted_item['image'] = data_item['src_image']
                 elif 'video' in data_item:
                     converted_item['video'] = data_item['video']
                 
