@@ -7,13 +7,13 @@ GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-export MASTER_PORT=34234
+export MASTER_PORT=34235
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 
 pretrained_model_path='/mnt/models/InternVL3-2B'
 vision_path2='/mnt/models/VGGT-1B/model.pt'
-OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_stage1'
+OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
@@ -36,7 +36,7 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/vsi_meta_env.json" \
+  --meta_path "./shell/data/vsi_mix_meta.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \
@@ -69,6 +69,6 @@ torchrun \
   --dynamic_image_size True \
   --use_thumbnail True \
   --ps_version 'v2' \
-  --deepspeed "zero_stage1_config.json" \
+  --deepspeed "zero_stage3_config_34b.json" \
   --report_to "tensorboard" \
   2>&1 | tee -a "${OUTPUT_DIR}/training_log.txt"

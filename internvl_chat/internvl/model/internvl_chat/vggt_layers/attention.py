@@ -15,6 +15,14 @@ from torch import Tensor
 from torch import nn
 import torch.nn.functional as F
 
+try:
+    from flash_attn import flash_attn_func, flash_attn_varlen_func
+    from flash_attn.bert_padding import unpad_input, pad_input
+    FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    FLASH_ATTN_AVAILABLE = False
+    flash_attn_func, flash_attn_varlen_func, unpad_input, pad_input = None, None, None, None
+
 # try:
 #     from xformers.ops import memory_efficient_attention
 #     XFORMERS_AVAILABLE = True
@@ -35,7 +43,7 @@ class Attention(nn.Module):
         proj_drop: float = 0.0,
         norm_layer: nn.Module = nn.LayerNorm,
         qk_norm: bool = False,
-        fused_attn: bool = True,  # use F.scaled_dot_product_attention or not
+        fused_attn: bool = True,  # use flash_attn or sdpa
         rope=None,
     ) -> None:
         super().__init__()
@@ -63,20 +71,40 @@ class Attention(nn.Module):
             q = self.rope(q, pos)
             k = self.rope(k, pos)
 
-        if mask is not None:
-            # The mask has shape (B, N). It needs to be broadcastable with shape (B, 1, N, N).
-            mask = mask.unsqueeze(-2).expand(B, N, N).unsqueeze(1) # (B, 1, N, N)
-
-        if self.fused_attn:
+        if self.fused_attn and FLASH_ATTN_AVAILABLE:
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+            if mask is None:
+                x = flash_attn_func(
+                    q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0, causal=False
+                )
+            else:
+                q_unpad, indices, cu_q_lens, max_s = unpad_input(q, mask)
+                k_unpad, _, cu_k_lens, _ = unpad_input(k, mask)
+                v_unpad, _, _, _ = unpad_input(v, mask)
+                x_unpad = flash_attn_varlen_func(
+                    q_unpad, k_unpad, v_unpad, cu_q_lens, cu_k_lens, max_s, max_s,
+                    dropout_p=self.attn_drop.p if self.training else 0.0,
+                    causal=False,
+                )
+                x = pad_input(x_unpad, indices, B, N)
+            x = x.transpose(1, 2)
+        elif self.fused_attn:
+            attn_mask = None
+            if mask is not None:
+                attn_mask = mask.unsqueeze(-2).expand(B, N, N).unsqueeze(1)
             x = F.scaled_dot_product_attention(
-                q, k, v,
-                attn_mask=mask,
+                q.contiguous(), k.contiguous(), v.contiguous(),
+                attn_mask=attn_mask,
                 dropout_p=self.attn_drop.p if self.training else 0.0)
         else:
             q = q * self.scale
             attn = q @ k.transpose(-2, -1)
             if mask is not None:
-                attn = attn.masked_fill(mask.unsqueeze(1).logical_not(), float("-inf"))
+                attn_mask = mask.unsqueeze(1).unsqueeze(2)
+                attn_mask = attn_mask.expand(B, self.num_heads, N, N)
+                attn = attn.masked_fill(attn_mask.logical_not(), float("-inf"))
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = attn @ v

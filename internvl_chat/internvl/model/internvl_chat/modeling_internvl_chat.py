@@ -190,6 +190,8 @@ class InternVLChatModel(PreTrainedModel):
             attention_mask2: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             image_flags: Optional[torch.LongTensor] = None,
+            image_flags2: Optional[torch.LongTensor] = None,
+            num_tiles: Optional[torch.LongTensor] = None,
             past_key_values: Optional[List[torch.FloatTensor]] = None,
             labels: Optional[torch.LongTensor] = None,
             use_cache: Optional[bool] = None,
@@ -202,17 +204,36 @@ class InternVLChatModel(PreTrainedModel):
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        image_flags = image_flags.squeeze(-1)
+        # image_flags = image_flags.squeeze(-1)
+        # image_flags2 = image_flags2.squeeze(-1)
         input_embeds = self.language_model.get_input_embeddings()(input_ids).clone()
+        B, N, C = input_embeds.shape
 
         vit_embeds = self.extract_feature(pixel_values)
         vit_embeds = vit_embeds[image_flags == 1]
+        # import ipdb;ipdb.set_trace()
         # for encoder2
-        img_embeds2 = self.extract_feature2(pixel_values2, attention_mask2)
-        # concat the 2 embeddings
-        vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
+        if pixel_values2 is not None:
+            img_embeds2 = self.extract_feature2(pixel_values2, attention_mask2)
+            img_embeds2 = img_embeds2[image_flags2 == 1]
+            # concat the 2 embeddings
+            if num_tiles is None:
+                vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
+                vit_embeds = vit_embeds.reshape(-1, C)
+            else:
+                vision_embeddings = []
+                idx_v1, idx_v2 = 0, 0
+                for tb in num_tiles:
+                    if tb is None:
+                        continue
+                    for nt in tb:
+                        vision_embeddings.append(
+                            torch.cat([img_embeds2[idx_v2], vit_embeds[idx_v1:idx_v1+nt].reshape(-1, C)], dim=0)
+                        )
+                        idx_v1 += nt
+                        idx_v2 += 1
+                vit_embeds = torch.cat(vision_embeddings, dim=0)
 
-        B, N, C = input_embeds.shape
         input_embeds = input_embeds.reshape(B * N, C)
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:

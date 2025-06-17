@@ -2,9 +2,9 @@ set -x
 
 GPUS=${GPUS:-1}
 BATCH_SIZE=${BATCH_SIZE:-2}
-PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
+PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-2}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
-CUDA_VISIBLE_DEVICES=1
+CUDA_VISIBLE_DEVICES=5
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 export MASTER_PORT=34019
@@ -33,7 +33,7 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/vsi_meta_test.json" \
+  --meta_path "./shell/data/data4debug.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \

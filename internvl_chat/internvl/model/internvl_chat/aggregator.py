@@ -18,6 +18,8 @@ from .vggt_layers.block import Block
 from .vggt_layers.rope import RotaryPositionEmbedding2D, PositionGetter
 from .vggt_layers.vision_transformer import vit_small, vit_base, vit_large, vit_giant2
 
+from internvl.train.constants import VGGT_WINDOW_SIZE
+
 logger = logging.getLogger(__name__)
 
 _RESNET_MEAN = [0.485, 0.456, 0.406]
@@ -201,7 +203,7 @@ class Aggregator(nn.Module):
             raise ValueError(f"Expected 3 input channels, got {C_in}")
 
         # Normalize images and reshape for patch embed
-        images = (images - self._resnet_mean) / self._resnet_std
+        images = (images - self._resnet_mean.to(images.device)) / self._resnet_std.to(images.device)
 
         # Reshape to [B*S, C, H, W] for patch embedding
         images = images.view(B * S, C_in, H, W)
@@ -244,7 +246,10 @@ class Aggregator(nn.Module):
                         tokens, B, S, P, C, frame_idx, pos=pos, attention_mask=attention_mask
                     )
                 elif attn_type == "global":
-                    tokens, global_idx, global_intermediates = self._process_global_attention(
+                    # tokens, global_idx, global_intermediates = self._process_global_attention(
+                    #     tokens, B, S, P, C, global_idx, pos=pos, attention_mask=attention_mask
+                    # )
+                    tokens, global_idx, global_intermediates = self._process_window_attention(
                         tokens, B, S, P, C, global_idx, pos=pos, attention_mask=attention_mask
                     )
                 else:
@@ -340,6 +345,57 @@ class Aggregator(nn.Module):
             # attention_mask is (B, S), repeat it P times for each patch
             attn_mask = attention_mask.repeat_interleave(P, dim=1)
             # a boolean mask of shape (B, S*P) where True means the element should take part in attention.
+            attn_mask = attn_mask.to(dtype=torch.bool)
+
+        for _ in range(self.aa_block_size):
+            block = self.global_blocks[global_idx]
+            global_idx += 1
+
+            if self.training:
+                # Gradient checkpointing
+                tokens = checkpoint(block, tokens, pos, attn_mask, use_reentrant=self.use_reentrant)
+            else:
+                tokens = block(tokens, pos=pos, mask=attn_mask)
+            intermediates.append(tokens.view(B, S, P, C))
+
+        # Reshape back to frame-based
+        tokens = tokens.view(B * S, P, C)
+        return tokens, global_idx, intermediates
+
+    def _process_window_attention(self, tokens, B, S, P, C, global_idx, pos=None, attention_mask=None):
+        """
+        Process window attention blocks.
+
+        Args:
+            tokens (torch.Tensor): Input tokens of shape (B*S, P, C).
+            B (int): Batch size.
+            S (int): Sequence length.
+            P (int): Number of patches per frame.
+            C (int): Channel dimension.
+            global_idx (int): Current global block index.
+            pos (torch.Tensor, optional): Positional embeddings of shape (B*S, P, 2). Defaults to None.
+            attention_mask (torch.Tensor, optional): Mask for padded frames of shape (B, S). Defaults to None.
+
+        Returns:
+            Tuple[torch.Tensor, int, List[torch.Tensor]]:
+                - The processed tokens of shape (B*S, P, C).
+                - The updated global block index.
+                - A list of intermediate token states.
+        """
+        assert S % VGGT_WINDOW_SIZE == 0, f"Frame length {S} must be divisible by window size {VGGT_WINDOW_SIZE}"
+        # Reshape for global attention
+        tokens = tokens.view(B * (S // VGGT_WINDOW_SIZE), VGGT_WINDOW_SIZE * P, C)
+        if pos is not None:
+            pos = pos.view(B * (S // VGGT_WINDOW_SIZE), VGGT_WINDOW_SIZE * P, 2)
+        intermediates = []
+
+        # Create attn_mask from attention_mask
+        attn_mask = None
+        if attention_mask is not None:
+            # attention_mask is (B, S), resize it and repeat it P times for each patch
+            attn_mask = attention_mask.view(B * (S // VGGT_WINDOW_SIZE), VGGT_WINDOW_SIZE)
+            attn_mask = attn_mask.repeat_interleave(P, dim=1)
+            # a boolean mask of shape (B*S/W, W*P) where True means the element should take part in attention.
             attn_mask = attn_mask.to(dtype=torch.bool)
 
         for _ in range(self.aa_block_size):

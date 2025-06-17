@@ -403,7 +403,7 @@ class LazySupervisedDataset(Dataset):
         self._state_dict = {}
 
         logger.info('Formatting inputs...Skip in lazy mode')
-        self.annotation_dir = os.path.join(meta['data_dir'], meta['annotation'])
+        self.annotation_dir = os.path.join(meta.get('data_dir', ''), meta['annotation'])
         assert self.annotation_dir.endswith('jsonl') or self.annotation_dir.endswith('json'), f'annotation must be jsonl, but got {self.annotation_dir}'
         if self.annotation_dir.endswith('json'):
             # Handle JSON format (array of objects)
@@ -506,7 +506,7 @@ class LazySupervisedDataset(Dataset):
                 # print("data_item:", data_item)
                 
                 if 'length' in data_item:
-                    print("length in data_item:", data_item['length'])
+                    # print("length in data_item:", data_item['length'])
                     token_length = data_item['length']  # Use precomputed length if available
                 else:
                     # Compute token length using the tokenizer
@@ -621,7 +621,7 @@ class LazySupervisedDataset(Dataset):
         preprocess_function = self.get_preprocess_function()
 
         # Preprocess the conversations and generate the return dictionary
-        num_image_tokens = [self.num_image_token * num_tile + self.num_img2_tokens * len(images2) for num_tile in num_tiles]
+        num_image_tokens = [self.num_image_token * num_tile + self.num_img2_tokens for num_tile in num_tiles]
         ret = preprocess_function(self.template_name, [deepcopy(data_item['conversations'])],
                                   self.tokenizer, num_image_tokens, group_by_length=self.group_by_length,
                                   use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_images)
@@ -640,7 +640,9 @@ class LazySupervisedDataset(Dataset):
             position_ids=position_ids[0],
             pixel_values=pixel_values,
             pixel_values2=pixel_values2,
-            image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
+            image_flags=torch.tensor([1] * num_patches, dtype=torch.long),
+            image_flags2=torch.tensor([1] * pixel_values2.size(0), dtype=torch.long),
+            num_tiles=num_tiles,
         )
         return ret
 
@@ -812,7 +814,9 @@ class LazySupervisedDataset(Dataset):
             position_ids=position_ids[0],
             pixel_values=pixel_values,
             pixel_values2=pixel_values2,
-            image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
+            image_flags=torch.tensor([1] * num_patches, dtype=torch.long),
+            image_flags2=torch.tensor([1] * pixel_values2.size(0), dtype=torch.long),
+            num_tiles=[1] * num_patches,
         )
         return ret
 
@@ -835,6 +839,8 @@ class LazySupervisedDataset(Dataset):
         # Ensure there is only one patch
         assert num_patches == 1, f'The number of patches should be 1, but got {num_patches}.'
 
+        pixel_values2 = preprocess_images2([image], mode="pad")
+
         # Select the appropriate preprocessing function based on the template name
         preprocess_function = self.get_preprocess_function()
 
@@ -855,7 +861,10 @@ class LazySupervisedDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
-            image_flags=torch.tensor([0] * num_patches, dtype=torch.long)
+            pixel_values2=pixel_values2,
+            image_flags=torch.tensor([0] * num_patches, dtype=torch.long),
+            image_flags2=torch.tensor([1] * pixel_values2.size(0), dtype=torch.long),
+            num_tiles=None,
         )
         return ret
 
@@ -1140,7 +1149,7 @@ def main():
             logger.info('Using flash_attention_2 for InternLM')
         else:
             config.llm_config._attn_implementation = 'flash_attention_2'  # for LLaMA
-            logger.info('Using flash_attention_2 for LLaMA')
+            logger.info(f'Using flash_attention_2 for {config.llm_config.model_type}')
         config.template = data_args.conv_style
         config.select_layer = model_args.vision_select_layer
         config.dynamic_image_size = data_args.dynamic_image_size
@@ -1264,6 +1273,8 @@ def main():
 
     if model_args.freeze_vision2:
         _freeze_params(model.vision_model2)
+    else:
+        raise ValueError(f'model_args.freeze_vision2 is {model_args.freeze_vision2}, but it should be True for now.')
 
     if model_args.unfreeze_vit_layers != 0:
         layers = model.vision_model.encoder.layers[model_args.unfreeze_vit_layers:]
