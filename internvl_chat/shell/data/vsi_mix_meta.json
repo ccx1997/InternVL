@@ -127,14 +127,6 @@
     "repeat_time": 1,
     "length": 14847
   },
-  "internVL-SA1B-Caption": {
-    "root": "",
-    "annotation": "/mnt/chensenda/datas/internVL-SA1B-Caption/internVL_SA1B_Caption_995130.json",
-    "data_dir": "",
-    "data_augment": false,
-    "repeat_time": 1,
-    "length": 995130
-  },
   "vqav2": {
     "root": "",
     "annotation": "/mnt/chensenda/datas/VQAv2/process_jsons/VQAv2_processed.json",
@@ -142,14 +134,6 @@
     "data_augment": false,
     "repeat_time": 1,
     "length": 131153
-  },
-  "allava_instruct": {
-    "root": "/mnt/liuyi/datasets/ALLAVA-4V",
-    "annotation": "/mnt/liuyi/datasets/ALLAVA-4V/allava_laion/ALLaVA-Instruct-LAION-4V.jsonl.checked.jsonl",
-    "data_dir": "",
-    "data_augment": false,
-    "repeat_time": 1,
-    "length": 468552
   },
   "gqa_balanced": {
     "root": "/mnt/liuyi/datasets/GQA/images",

@@ -446,6 +446,8 @@ class LazySupervisedDataset(Dataset):
                 # Handle image/video field
                 if 'image' in data_item:
                     converted_item['image'] = data_item['image']
+                elif 'src_image' in data_item:
+                    converted_item['image'] = data_item['src_image']
                 elif 'video' in data_item:
                     converted_item['video'] = data_item['video']
                 
@@ -570,8 +572,10 @@ class LazySupervisedDataset(Dataset):
     def multi_modal_get_item(self, data_item):
         # Build transformation function
         transform = self.get_transform()
-
-        image_paths = data_item['image']
+        if 'image' in data_item:
+            image_paths = data_item['image']
+        elif 'src_image' in data_item:
+            image_paths = data_item['src_image']
         is_multi_image = isinstance(image_paths, list)
 
         if not is_multi_image:
@@ -900,6 +904,8 @@ class LazySupervisedDataset(Dataset):
                 # conversations = data_item['conversations']
                 # check_conversations_repetition(conversations, repeat_threshold=0.4, ngram=10)
                 if 'image' in data_item and len(data_item['image']) != 0:
+                    ret = self.multi_modal_get_item(data_item)
+                elif 'src_image' in data_item and len(data_item['src_image']) != 0:
                     ret = self.multi_modal_get_item(data_item)
                 elif 'video' in data_item and data_item['video'] is not None and data_item['video'] != '':
                     ret = self.video_get_item(data_item)
