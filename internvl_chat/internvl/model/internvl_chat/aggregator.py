@@ -297,7 +297,8 @@ class Aggregator(nn.Module):
                     tokens = checkpoint(block, tokens, pos, use_reentrant=self.use_reentrant)
                 else:
                     valid_indices = torch.where(attention_mask.flatten())[0]
-                    processed_tokens = block(tokens[valid_indices], pos=pos[valid_indices] if pos is not None else None)
+                    # processed_tokens = block(tokens[valid_indices], pos=pos[valid_indices] if pos is not None else None)
+                    processed_tokens = checkpoint(block, tokens[valid_indices], pos[valid_indices] if pos is not None else None, use_reentrant=self.use_reentrant)
                     output_tokens = tokens.clone()
                     output_tokens[valid_indices] = processed_tokens
                     tokens = output_tokens
