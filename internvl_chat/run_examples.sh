@@ -1,0 +1,1 @@
+python simple_inference_demo.py     --input /mnt/chensenda/codes/VLN/InternVL/internvl_chat/examples/image1.jpg    --question "Describe what you see in this image"
