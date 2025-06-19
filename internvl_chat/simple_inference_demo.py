@@ -398,6 +398,8 @@ def patch_model_chat_method(model):
             question = '<image>\n' + question
         if num_patches_list is None:
             num_patches_list = [pixel_values.shape[0]] if pixel_values is not None else []
+        if pixel_values2 is not None:
+            num_patches_list_2 = [pixel_values2.shape[1]] if pixel_values2 is not None else []
 
         self.img_context_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
 
@@ -416,13 +418,25 @@ def patch_model_chat_method(model):
 
         # —— 插入 <image> token 总数 —— #
         n_img2 = 13 * 13 + 1    # 训练时写死 170
-        for n_patch in num_patches_list:
-            total = self.num_image_token * n_patch + n_img2
+        for n_patch, n_patch2 in zip(num_patches_list, num_patches_list_2):
+            # Fix: For video frames, each frame has both encoder tokens
+            # Training uses: [self.num_image_token + self.num_img2_tokens] * num_patches
+            # So each patch/frame gets: self.num_image_token + n_img2 tokens
+            print(f"n_patch: {n_patch}, n_patch2: {n_patch2}")
+
+            if  n_patch==n_patch2:
+                total = (self.num_image_token + n_img2) * n_patch
+                if verbose:
+                    print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
+                        f"enc2={n_img2 * n_patch}, total={total}")
+            else:
+                total = self.num_image_token*n_patch + n_img2
+                if verbose:
+                    print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
+                        f"enc2={n_img2}, total={total}")
             img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
             prompt = prompt.replace('<image>', img_tokens, 1)
-            if verbose:
-                print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
-                      f"enc2={n_img2}, total={total}")
+
 
         model_inp = tokenizer(prompt, return_tensors='pt')
         device = next(self.parameters()).device
@@ -492,7 +506,7 @@ def simple_chat(model, tokenizer,
 
 def main():
     parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1/checkpoint-4200',
+    parser.add_argument('--checkpoint', default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1/checkpoint-8800',
                         help='Path to dual‑encoder checkpoint')
     parser.add_argument('--input', required=True,
                         help='Image / video path')
@@ -525,12 +539,15 @@ def main():
         frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
         q = args.question.replace('<video>', frame_info) if '<video>' in args.question \
             else frame_info + '\n' + args.question
+
+        args.max_patches=1
     else:
         imgs = [load_image(args.input)]
         q = '<image>\n' + args.question if '<image>' not in args.question else args.question
 
     # ---- preprocess ----
     print("⇢ Preprocessing images / frames")
+    
     pv1, pv2 = preprocess_images(imgs,
                                  image_size=model.config.force_image_size
                                  or model.config.vision_config.image_size,
