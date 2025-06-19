@@ -379,6 +379,7 @@ def patch_model_chat_method(model):
         return outs
 
     # ---------- chat ----------
+    @torch.no_grad()
     def chat_with_dual_encoder(self,
                                tokenizer,
                                pixel_values,
@@ -506,7 +507,7 @@ def simple_chat(model, tokenizer,
 
 def main():
     parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1/checkpoint-8800',
+    parser.add_argument('--checkpoint', default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1/checkpoint-9200',
                         help='Path to dual‑encoder checkpoint')
     parser.add_argument('--input', required=True,
                         help='Image / video path')

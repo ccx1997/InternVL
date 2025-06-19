@@ -15,13 +15,13 @@ from torch import Tensor
 from torch import nn
 import torch.nn.functional as F
 
-# try:
-#     from flash_attn import flash_attn_func, flash_attn_varlen_func
-#     from flash_attn.bert_padding import unpad_input, pad_input
-#     FLASH_ATTN_AVAILABLE = True
-# except ImportError:
-FLASH_ATTN_AVAILABLE = False
-flash_attn_func, flash_attn_varlen_func, unpad_input, pad_input = None, None, None, None
+try:
+    from flash_attn import flash_attn_func, flash_attn_varlen_func
+    from flash_attn.bert_padding import unpad_input, pad_input
+    FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    FLASH_ATTN_AVAILABLE = False
+    flash_attn_func, flash_attn_varlen_func, unpad_input, pad_input = None, None, None, None
 
 # try:
 #     from xformers.ops import memory_efficient_attention
