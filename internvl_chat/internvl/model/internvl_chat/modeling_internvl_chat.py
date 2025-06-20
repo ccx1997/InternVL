@@ -44,7 +44,7 @@ class InternVLChatModel(PreTrainedModel):
     main_input_name = 'pixel_values'
     base_model_prefix = 'language_model'
     _no_split_modules = ['InternVisionModel', 'LlamaDecoderLayer', 'InternLM2DecoderLayer',
-                         'Phi3DecoderLayer', 'Qwen2DecoderLayer']
+                         'Phi3DecoderLayer', 'Qwen2DecoderLayer', 'DinoVisionTransformer', 'VGGTBlock']
     _supports_flash_attn_2 = True
     supports_gradient_checkpointing = True
 
@@ -182,25 +182,25 @@ class InternVLChatModel(PreTrainedModel):
         self.language_model.print_trainable_parameters()
 
     def forward(
-            self,
-            pixel_values: torch.FloatTensor,
-            pixel_values2: torch.FloatTensor,
-            input_ids: torch.LongTensor = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            attention_mask2: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            image_flags: Optional[torch.LongTensor] = None,
-            image_flags2: Optional[torch.LongTensor] = None,
-            num_tiles: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[List[torch.FloatTensor]] = None,
-            labels: Optional[torch.LongTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None,
-            statistics: Optional[torch.LongTensor] = None,
-            loss_weight: Optional[List] = None,
-            loss_reduction_all_gather: Optional[bool] = False,
+        self,
+        pixel_values: torch.FloatTensor,
+        pixel_values2: torch.FloatTensor,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask2: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        image_flags: Optional[torch.LongTensor] = None,
+        image_flags2: Optional[torch.LongTensor] = None,
+        num_tiles: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        statistics: Optional[torch.LongTensor] = None,
+        loss_weight: Optional[List] = None,
+        loss_reduction_all_gather: Optional[bool] = False,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -360,13 +360,17 @@ class InternVLChatModel(PreTrainedModel):
     
     def extract_feature2(self, pixel_values2, attention_mask2):
         # extract features by a parallel encoder
-        img_embeds_list, patch_start_idx = self.vision_model2(pixel_values2, attention_mask=attention_mask2)
-        camera_pose_features = img_embeds_list[-1][:, :, 0:1] # [B, S, 1, C]
-        img_embeds2 = img_embeds_list[-1][:, :, patch_start_idx:] # [B, S, P, C]
+        with torch.no_grad():
+            self.vision_model2.eval()
+            img_embeds_list, patch_start_idx = self.vision_model2(pixel_values2, attention_mask=attention_mask2)
+        camera_pose_features = img_embeds_list[-1][:, :, 0:1]  # [B, S, 1, C]
+        img_embeds2 = img_embeds_list[-1][:, :, patch_start_idx:]  # [B, S, P, C]
+        del img_embeds_list
         # filter padding frame features
         B, S, P, C = img_embeds2.shape
-        camera_pose_features = camera_pose_features.reshape(B*S, 1, C)[attention_mask2.flatten()] # [N, 1, C], N is the number of valid frames
-        img_embeds2 = img_embeds2.reshape(B*S, P, C)[attention_mask2.flatten()] # [N, P, C]
+        camera_pose_features = camera_pose_features.reshape(B * S, 1, C)[
+            attention_mask2.flatten()]  # [N, 1, C], N is the number of valid frames
+        img_embeds2 = img_embeds2.reshape(B * S, P, C)[attention_mask2.flatten()]  # [N, P, C]
         # downsample
         side = int(P ** 0.5)
         img_embeds2 = img_embeds2.reshape(-1, side, side, C).permute(0, 3, 1, 2) # [N, C, side, side]

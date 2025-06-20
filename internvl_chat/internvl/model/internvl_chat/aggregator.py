@@ -14,7 +14,7 @@ from torch.utils.checkpoint import checkpoint
 from typing import Optional, Tuple, Union, List, Dict, Any
 
 from .vggt_layers import PatchEmbed
-from .vggt_layers.block import Block
+from .vggt_layers.block import VGGTBlock
 from .vggt_layers.rope import RotaryPositionEmbedding2D, PositionGetter
 from .vggt_layers.vision_transformer import vit_small, vit_base, vit_large, vit_giant2
 
@@ -41,7 +41,7 @@ class Aggregator(nn.Module):
         num_heads (int): Number of attention heads.
         mlp_ratio (float): Ratio of MLP hidden dim to embedding dim.
         num_register_tokens (int): Number of register tokens.
-        block_fn (nn.Module): The block type used for attention (Block by default).
+        block_fn (nn.Module): The block type used for attention (VGGTBlock by default).
         qkv_bias (bool): Whether to include bias in QKV projections.
         proj_bias (bool): Whether to include bias in the output projection.
         ffn_bias (bool): Whether to include bias in MLP layers.
@@ -62,7 +62,7 @@ class Aggregator(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         num_register_tokens=4,
-        block_fn=Block,
+        block_fn=VGGTBlock,
         qkv_bias=True,
         proj_bias=True,
         ffn_bias=True,

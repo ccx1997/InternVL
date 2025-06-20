@@ -11,17 +11,18 @@ import logging
 import os
 import warnings
 
+import torch
 from torch import Tensor
 from torch import nn
 import torch.nn.functional as F
 
 try:
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
+    from flash_attn import flash_attn_func, flash_attn_varlen_func, flash_attn_varlen_qkvpacked_func
     from flash_attn.bert_padding import unpad_input, pad_input
     FLASH_ATTN_AVAILABLE = True
 except ImportError:
     FLASH_ATTN_AVAILABLE = False
-    flash_attn_func, flash_attn_varlen_func, unpad_input, pad_input = None, None, None, None
+    flash_attn_func, flash_attn_varlen_func, flash_attn_varlen_qkvpacked_func, unpad_input, pad_input = None, None, None, None, None
 
 # try:
 #     from xformers.ops import memory_efficient_attention
@@ -63,53 +64,69 @@ class Attention(nn.Module):
 
     def forward(self, x: Tensor, pos=None, mask=None) -> Tensor:
         B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)
-        q, k = self.q_norm(q), self.k_norm(k)
-
-        if self.rope is not None:
-            q = self.rope(q, pos)
-            k = self.rope(k, pos)
 
         if self.fused_attn and FLASH_ATTN_AVAILABLE:
-            q = q.transpose(1, 2)
-            k = k.transpose(1, 2)
-            v = v.transpose(1, 2)
-            if mask is None:
-                x = flash_attn_func(
-                    q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0, causal=False
-                )
-            else:
-                q_unpad, indices, cu_q_lens, max_s = unpad_input(q, mask)
-                k_unpad, _, cu_k_lens, _ = unpad_input(k, mask)
-                v_unpad, _, _, _ = unpad_input(v, mask)
-                x_unpad = flash_attn_varlen_func(
-                    q_unpad, k_unpad, v_unpad, cu_q_lens, cu_k_lens, max_s, max_s,
-                    dropout_p=self.attn_drop.p if self.training else 0.0,
-                    causal=False,
-                )
-                x = pad_input(x_unpad, indices, B, N)
-            x = x.transpose(1, 2)
-        elif self.fused_attn:
-            attn_mask = None
-            if mask is not None:
-                attn_mask = mask.unsqueeze(-2).expand(B, N, N).unsqueeze(1)
-            x = F.scaled_dot_product_attention(
-                q.contiguous(), k.contiguous(), v.contiguous(),
-                attn_mask=attn_mask,
-                dropout_p=self.attn_drop.p if self.training else 0.0)
-        else:
-            q = q * self.scale
-            attn = q @ k.transpose(-2, -1)
-            if mask is not None:
-                attn_mask = mask.unsqueeze(1).unsqueeze(2)
-                attn_mask = attn_mask.expand(B, self.num_heads, N, N)
-                attn = attn.masked_fill(attn_mask.logical_not(), float("-inf"))
-            attn = attn.softmax(dim=-1)
-            attn = self.attn_drop(attn)
-            x = attn @ v
+            qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim)
+            q, k, v = qkv.unbind(2)
 
-        x = x.transpose(1, 2).reshape(B, N, C)
+            q, k = self.q_norm(q), self.k_norm(k)
+            if self.rope is not None:
+                # rope needs (B, H, N, D) but q is (B, N, H, D), so we transpose
+                q = self.rope(q.transpose(1, 2), pos).transpose(1, 2)
+                k = self.rope(k.transpose(1, 2), pos).transpose(1, 2)
+
+            qkv = torch.stack([q, k, v], dim=2)
+
+            if mask is None:
+                qkv = qkv.reshape(-1, 3, self.num_heads, self.head_dim)
+                cu_seqlens = torch.arange(0, (B + 1) * N, step=N, dtype=torch.int32, device=qkv.device)
+                max_s = N
+                x = flash_attn_varlen_qkvpacked_func(
+                    qkv, cu_seqlens, max_s, self.attn_drop.p if self.training else 0.0,
+                    softmax_scale=self.scale, causal=False
+                )
+                x = x.reshape(B, N, C)
+            else:
+                qkv = qkv.reshape(B, N, 3 * C)
+                x_unpad, indices, cu_seqlens, max_s = unpad_input(qkv, mask)
+                x_unpad = x_unpad.reshape(-1, 3, self.num_heads, self.head_dim)
+                output_unpad = flash_attn_varlen_qkvpacked_func(
+                    x_unpad, cu_seqlens, max_s, self.attn_drop.p if self.training else 0.0,
+                    softmax_scale=self.scale, causal=False
+                )
+                output_unpad = output_unpad.reshape(-1, C)
+                x = pad_input(output_unpad, indices, B, N)
+
+        else:
+            qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+            q, k, v = qkv.unbind(0)
+            q, k = self.q_norm(q), self.k_norm(k)
+
+            if self.rope is not None:
+                q = self.rope(q, pos)
+                k = self.rope(k, pos)
+
+            if self.fused_attn:  # SDPA path
+                attn_mask = None
+                if mask is not None:
+                    # The expected mask shape for SDPA is (B, H, N, N) or broadcastable
+                    attn_mask = mask.unsqueeze(1).unsqueeze(2).expand(-1, self.num_heads, N, -1).contiguous()
+                x = F.scaled_dot_product_attention(
+                    q, k, v,
+                    attn_mask=attn_mask,
+                    dropout_p=self.attn_drop.p if self.training else 0.0)
+            else:  # Naive path
+                warnings.warn("Using naive attention. This is NOT RECOMMENDED.")
+                q = q * self.scale
+                attn = q @ k.transpose(-2, -1)
+                if mask is not None:
+                    attn_mask = mask.unsqueeze(1).unsqueeze(2).expand(B, self.num_heads, N, N)
+                    attn = attn.masked_fill(attn_mask.logical_not(), float('-inf'))
+                attn = attn.softmax(dim=-1)
+                attn = self.attn_drop(attn)
+                x = attn @ v
+            x = x.transpose(1, 2).reshape(B, N, C)
+
         x = self.proj(x)
         x = self.proj_drop(x)
         return x

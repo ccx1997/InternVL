@@ -24,7 +24,7 @@ from .mlp import Mlp
 XFORMERS_AVAILABLE = False
 
 
-class Block(nn.Module):
+class VGGTBlock(nn.Module):
     def __init__(
         self,
         dim: int,
@@ -195,7 +195,7 @@ def drop_add_residual_stochastic_depth_list(
     return outputs
 
 
-class NestedTensorBlock(Block):
+class NestedTensorBlock(VGGTBlock):
     def forward_nested(self, x_list: List[Tensor]) -> List[Tensor]:
         """
         x_list contains a list of tensors to nest together and run

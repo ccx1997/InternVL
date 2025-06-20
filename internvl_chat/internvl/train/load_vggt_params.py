@@ -24,7 +24,7 @@ def load_vggt_params_in_internvl(model, vggt_path):
                             if not dist.is_initialized() or dist.get_rank() == 0:
                                 print(f'Shape mismatch for {new_k}: '
                                     f'expect {vision2_model_state_dict[new_k].shape}, got {v.shape}')
-            msg = model.vision_model2.load_state_dict(vggt_aggregator_state_dict, strict=False)
+            msg = model.vision_model2.load_state_dict(vggt_aggregator_state_dict, strict=True)
             if not dist.is_initialized() or dist.get_rank() == 0:
                 print(f'Loaded VGGT aggregator parameters into vision_model2: {msg}')
     else:
