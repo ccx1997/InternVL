@@ -1,42 +1,42 @@
 {
-    "objects365": {
-        "root": "",
-        "annotation": "/mnt/chengchangxu/data/Objects365/objects365_train_450k.json",
-        "data_dir": "",
-        "data_augment": false,
-        "repeat_time": 1,
-        "length": 450000
-    },
-    "boxcotrd": {
-        "root": "",
-        "annotation": "/mnt/chengchangxu/data/shikra_data/reformatted/GPT4GEN_RD_BoxCoT_train.json",
-        "data_dir": "",
-        "data_augment": false,
-        "repeat_time": 1,
-        "length": 1878
-    },
-    "boxcot": {
-        "root": "",
-        "annotation": "/mnt/chengchangxu/data/shikra_data/reformatted/GPT4GEN_BoxCoT_train.json",
-        "data_dir": "",
-        "data_augment": false,
-        "repeat_time": 1,
-        "length": 4044
-    },
-    "sk_vg": {
-        "root": "",
-        "annotation": "/mnt/chengchangxu/data/sk-vg.v1/sk_vg_train.json",
-        "data_dir": "",
-        "data_augment": false,
-        "repeat_time": 1,
-        "length": 23339
-    },
-    "cops_ref": {
-        "root": "",
-        "annotation": "/mnt/chengchangxu/data/Cops-Ref/cops-ref_train.json",
-        "data_dir": "",
-        "data_augment": false,
-        "repeat_time": 1,
-        "length": 11862
-    }
+  "objects365": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/Objects365/objects365_train_450k.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 450000
+  },
+  "boxcotrd": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/shikra_data/reformatted/GPT4GEN_RD_BoxCoT_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 1878
+  },
+  "boxcot": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/shikra_data/reformatted/GPT4GEN_BoxCoT_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 4044
+  },
+  "sk_vg": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/sk-vg.v1/sk_vg_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 23339
+  },
+  "cops_ref": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/Cops-Ref/cops-ref_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 11862
+  }
 }

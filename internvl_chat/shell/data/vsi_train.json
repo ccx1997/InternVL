@@ -8,20 +8,20 @@
   },
   "Multi-SpatialMLLM": {
     "root": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/data/scannet/posed_images",
-    "annotation": "multispatialmllm_train.jsonl",
-    "data_dir": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/training_data/camera_movement/v1_0",
+    "annotation": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/training_data/camera_movement/v1_0/multispatialmllm_train.jsonl",
+    "data_dir": "",
     "data_augment": false,
     "repeat_time": 1,
     "length": 750000
   },
-  "roboSpatial":{
+  "roboSpatial": {
     "root": "",
     "annotation": "/mnt/chensenda/codes/RoboSpatial/scripts/training_data.jsonl",
     "data_augment": false,
     "repeat_time": 1,
-    "length": 575090
+    "length": 575098
   },
-  "spacer_151k":{
+  "spacer_151k": {
     "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
     "annotation": "/mnt/chensenda/VLNDatas/SpaceR-151k/spacer_151k_vsi_format.jsonl",
     "data_augment": false,

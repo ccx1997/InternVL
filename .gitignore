@@ -174,3 +174,5 @@ batchscript-*
 results/
 
 *.out
+*.backup
+work_dirs/
