@@ -259,10 +259,10 @@ def validate_entry(entry, dataset_config):
             media_files = [entry['src_image']]
     elif 'video' in entry and entry['video']:
         media_type = 'video'
-        if isinstance(entry['video'], list):
-            media_files = entry['video']
-        else:
-            media_files = [entry['video']]
+        data_source = entry.get('data_source', '').strip()
+        if isinstance(entry['video'], str):
+            entry['video'] = [entry['video']]
+        media_files = [os.path.join(data_source, video) for video in entry['video']]
     
     # Check placeholder count
     try:
@@ -466,7 +466,7 @@ def main():
     parser = argparse.ArgumentParser(description="Filter VSI meta dataset entries.")
     parser.add_argument("--config", required=True, help="Path to vsi_meta_test.json config file")
     parser.add_argument("--datasets", nargs='*', help="Specific datasets to process (process all if not specified)")
-    parser.add_argument("--parallel", type=int, default=4, help="Number of threads for parallel processing")
+    parser.add_argument("--parallel", type=int, default=1, help="Number of threads for parallel processing")
     parser.add_argument("--save", action="store_true", help="Save filtered results")
     parser.add_argument("--output_dir", default="./filtered_results", help="Directory to save output files")
     parser.add_argument("--log", action="store_true", help="Enable logging to file")

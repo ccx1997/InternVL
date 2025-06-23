@@ -20,7 +20,7 @@
     "data_dir":"",
     "data_augment": false,
     "repeat_time": 1,
-    "length": 151000
+    "length": 121313
   },
   "objects365": {
     "root": "",

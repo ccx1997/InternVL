@@ -261,7 +261,7 @@ class DataTrainingArguments:
     )
     meta_path: str = field(
         default=None,
-        metadata={'help': 'The path of the meta file of datasets.'},
+        metadata={'help': 'The path of the meta file of datasets. Can be either a dataset hub, or hub of hubs.'},
     )
     use_data_resampling: bool = field(
         default=False,
@@ -770,7 +770,8 @@ class LazySupervisedDataset(Dataset):
 
         # Get the video file path
         video_file = data_item['video']
-        video_path = os.path.join(self.root, video_file)
+        data_source = data_item.get('data_source', '') # for LLaVA-Video-178K
+        video_path = os.path.join(self.root, data_source, video_file)
 
         # Load the video frames using tcs_loader
         # TODO: Load videos without using tcsloader.
@@ -981,7 +982,23 @@ def build_datasets(
     else:
         data_rank = 0
         data_world_size = 1
-    ds_collections = json.loads(open(data_args.meta_path).read())
+
+    with open(data_args.meta_path, 'r') as f:
+        ds_hub = jsonprocess.load(f)
+    if ds_hub.get('type', '') == 'hub':
+        ds_collections = {}
+        for item in ds_hub['data']:
+            with open(item['meta'], 'r') as f:
+                new_ds_collections = jsonprocess.load(f)
+                for key in new_ds_collections:
+                    if key in ds_collections:
+                        raise ValueError(f"Duplicate key '{key}' found in meta file: {item['meta']}")
+                    ds_collections[key] = new_ds_collections[key]
+                    ds_collections[key]['repeat_time'] = item['ratio'] * ds_collections[key]['repeat_time']
+    else:
+        with open(data_args.meta_path, 'r') as f:
+            ds_collections = jsonprocess.load(f)
+
     for ds_idx, ds_name in enumerate(ds_collections.keys()):
         repeat_time = ds_collections[ds_name]['repeat_time']
         if 'max_dynamic_patch' in ds_collections[ds_name]:

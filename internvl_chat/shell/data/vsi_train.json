@@ -1,0 +1,31 @@
+{
+  "roomtour3d": {
+    "root": "/mnt/chengchangxu/data/roomtour3d/room_tour_video_3fps",
+    "annotation": "/mnt/chengchangxu/data/roomtour3d/roomtour3d/p1_train_reformat_std.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 218736
+  },
+  "Multi-SpatialMLLM": {
+    "root": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/data/scannet/posed_images",
+    "annotation": "multispatialmllm_train.jsonl",
+    "data_dir": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/training_data/camera_movement/v1_0",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 750000
+  },
+  "roboSpatial":{
+    "root": "",
+    "annotation": "/mnt/chensenda/codes/RoboSpatial/scripts/training_data.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 575090
+  },
+  "spacer_151k":{
+    "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
+    "annotation": "/mnt/chensenda/VLNDatas/SpaceR-151k/spacer_151k_vsi_format.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 121313
+  }
+}

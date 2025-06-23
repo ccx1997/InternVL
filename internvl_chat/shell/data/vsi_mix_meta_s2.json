@@ -1,0 +1,30 @@
+{
+    "type": "hub",
+    "data": [
+        {
+            "meta": "./shell/data/vsi_train.json",
+            "ratio": 1.0,
+            "length": 1665139
+        },
+        {
+            "meta": "./shell/data/llava_video_178k.json",
+            "ratio": 1.0,
+            "length": 898992
+        },
+        {
+            "meta": "./shell/data/visual_grounding.json",
+            "ratio": 1.0,
+            "length": 491123
+        },
+        {
+            "meta": "./shell/data/general_mm.json",
+            "ratio": 1.0,
+            "length": 2439026
+        },
+        {
+            "meta": "./shell/data/ocr.json",
+            "ratio": 1.0,
+            "length": 17478
+        }
+    ]
+}

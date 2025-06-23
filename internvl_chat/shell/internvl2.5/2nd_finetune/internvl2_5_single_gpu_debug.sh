@@ -34,14 +34,14 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/data4debug.json" \
+  --meta_path "./shell/data/llava_video_178k.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \
   --down_sample_ratio 0.5 \
   --drop_path_rate 0.1 \
   --freeze_llm True \
-  --freeze_mlp False \
+  --freeze_mlp True \
   --freeze_backbone True \
   --freeze_mlp2 False \
   --freeze_vision2 True \
@@ -65,7 +65,7 @@ torchrun \
   --do_train True \
   --grad_checkpoint True \
   --group_by_length True \
-  --dynamic_image_size True \
+  --dynamic_image_size False \
   --use_thumbnail True \
   --ps_version 'v2' \
   --deepspeed "zero_stage1_config.json" \

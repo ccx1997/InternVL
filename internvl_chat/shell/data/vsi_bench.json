@@ -1,0 +1,9 @@
+{
+    "vsi_bench": {
+      "root": "/mnt/chengchangxu/data/VSI-Bench",
+      "annotation": "/mnt/chengchangxu/data/VSI-Bench/vsi_bench_test.jsonl",
+      "data_augment": false,
+      "repeat_time": 1,
+      "length": 5130
+    }
+}

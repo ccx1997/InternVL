@@ -8,13 +8,13 @@ GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-export MASTER_PORT=34235
+export MASTER_PORT=34236
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 
-pretrained_model_path='/mnt/models/InternVL3-2B'
+pretrained_model_path='/mnt/models/InternVL3-8B'
 vision_path2='/mnt/models/VGGT-1B/model.pt'
-OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_2b_mix_stage1'
+OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage1'
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
@@ -40,11 +40,11 @@ torchrun \
   --meta_path "./shell/data/vsi_mix_meta_s1.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
-  --max_dynamic_patch 4 \
+  --max_dynamic_patch 1 \
   --down_sample_ratio 0.5 \
   --drop_path_rate 0.1 \
   --freeze_llm True \
-  --freeze_mlp False \
+  --freeze_mlp True \
   --freeze_backbone True \
   --freeze_mlp2 False \
   --freeze_vision2 True \
@@ -68,7 +68,7 @@ torchrun \
   --do_train True \
   --grad_checkpoint True \
   --group_by_length True \
-  --dynamic_image_size True \
+  --dynamic_image_size False \
   --use_thumbnail True \
   --ps_version 'v2' \
   --deepspeed "zero_stage3_config_34b.json" \

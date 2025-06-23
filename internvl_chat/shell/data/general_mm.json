@@ -1,0 +1,114 @@
+{
+    "internVL-SA1B-Caption": {
+        "root": "",
+        "annotation": "/mnt/chensenda/datas/internVL-SA1B-Caption/internVL_SA1B_Caption_995130.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 995130
+    },
+    "allava_instruct": {
+        "root": "/mnt/chensenda/datas/ALLaVA",
+        "annotation": "/mnt/liuyi/datasets/ALLAVA-4V/allava_laion/ALLaVA-Instruct-LAION-4V.jsonl.checked.jsonl",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 468552
+    },
+    "CogVLMSFT_multi_conversation_train_format_mixlang_30k": {
+        "root": "/mnt/chensenda/datas/CogVLM-SFT-311K/CogVLM-SFT-311K/llava_instruction_multi_conversations_formate",
+        "annotation": "/mnt/chengchangxu/data/jsons/peter__proj__mix0508__clip_process_filter2/CogVLMSFT_multi_conversation_train_format_mixlang_30k.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 32006
+    },
+    "SVIT_core_60K_1000_1000_scaffold_costhan0.12": {
+        "root": "/mnt/chensenda/datas/Visual_Genome",
+        "annotation": "/mnt/chengchangxu/data/jsons/peter__proj__mix0703/SVIT_core_60K_1000_1000_scaffold_costhan0.12.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 62780
+    },
+    "docci_descriptions_checked_14k": {
+        "root": "/mnt/chensenda/datas/DOCCI/images",
+        "annotation": "/mnt/chengchangxu/data/jsons/liwenhao__docci/docci_descriptions_checked_14k.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 14847
+    },
+    "llava150k": {
+        "root": "/mnt/chensenda/datas/train2017/train2017",
+        "annotation": "/mnt/wlf/datas/LLaVA-Instruct-150K/llava_instruct_150k.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 131153
+    },
+    "vqav2": {
+        "root": "",
+        "annotation": "/mnt/chensenda/datas/VQAv2/process_jsons/VQAv2_processed.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 131153
+    },
+    "gqa_balanced": {
+        "root": "/mnt/liuyi/datasets/GQA/images",
+        "annotation": "/mnt/liuyi/datasets/GQA/gqa_balanced.jsonl",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 268616
+    },
+    "synth_clock": {
+        "root": "/mnt/chengchangxu/data/clocks/images",
+        "annotation": "/mnt/chengchangxu/data/clocks/clocks_train.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 6000
+    },
+    "MMInstruct-GPT4V_sampled": {
+        "root": "/mnt/liuyi/datasets/MMInstruct-GPT4V/images",
+        "annotation": "/mnt/chengchangxu/data/MMInstruct-GPT4V_filter_zh_222269.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 222266
+    },
+    "aokvqa": {
+        "root": "/mnt/chengchangxu/projects/data_factory",
+        "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_aokvqa.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 16539
+    },
+    "visual7w": {
+        "root": "/mnt/chengchangxu/projects/data_factory",
+        "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_visual7w.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 14366
+    },
+    "tallyqa": {
+        "root": "/mnt/chengchangxu/projects/data_factory",
+        "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_tallyqa.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 19705
+    },
+    "clevr": {
+        "root": "/mnt/chengchangxu/projects/data_factory",
+        "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_clevr.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 55913
+    }
+}
