@@ -259,10 +259,10 @@ def validate_entry(entry, dataset_config):
             media_files = [entry['src_image']]
     elif 'video' in entry and entry['video']:
         media_type = 'video'
-        if isinstance(entry['video'], list):
-            media_files = entry['video']
-        else:
-            media_files = [entry['video']]
+        data_source = entry.get('data_source', '').strip()
+        if isinstance(entry['video'], str):
+            entry['video'] = [entry['video']]
+        media_files = [os.path.join(data_source, video) for video in entry['video']]
     
     # Check placeholder count
     try:
