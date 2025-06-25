@@ -416,7 +416,7 @@ class LazySupervisedDataset(Dataset):
             with open(self.annotation_dir, 'r') as f:
                 self.raw_data = f.readlines()
 
-        # Format conversion: convert from original format to target format
+        # Conversation format conversion: convert from original format to target format
         converted_data = []
         for idx, data_line in enumerate(self.raw_data):
             try:
@@ -763,10 +763,14 @@ class LazySupervisedDataset(Dataset):
         transform = self.get_transform()
 
         # Ensure the first conversation contains a video placeholder
-        if '<video>' not in data_item['conversations'][0]['value']:
-            data_item['conversations'][0]['value'] = '<video>\n' + data_item['conversations'][0]['value']
+        conv0_val = data_item['conversations'][0]['value']
+        if '<video>' not in conv0_val:
+            if '<image>' in conv0_val and conv0_val.count('<image>') == 1:
+                data_item['conversations'][0]['value'] = conv0_val.replace('<image>', '<video>')
+            else:
+                data_item['conversations'][0]['value'] = '<video>\n' + conv0_val
         # make sure there is only 1 placeholder.
-        assert data_item['conversations'][0]['value'].count('<video>') == 1
+        assert data_item['conversations'][0]['value'].count('<video>') == 1, f'{data_item}'
 
         # Get the video file path
         video_file = data_item['video']
@@ -909,6 +913,9 @@ class LazySupervisedDataset(Dataset):
                 elif 'src_image' in data_item and len(data_item['src_image']) != 0:
                     ret = self.multi_modal_get_item(data_item)
                 elif 'video' in data_item and data_item['video'] is not None and data_item['video'] != '':
+                    if isinstance(data_item['video'], list):
+                        assert len(data_item['video']) == 1, f'We now only support one video per sample, but got {data_item}'
+                        data_item['video'] = data_item['video'][0]
                     ret = self.video_get_item(data_item)
                 else:
                     ret = self.pure_text_get_item(data_item)
@@ -972,6 +979,7 @@ def build_datasets(
     min_num_frame=8,
     max_num_frame=32,
     normalize_type='imagenet',
+    output_dir=None,
 ):
     datasets = []
     lengths = []
@@ -998,6 +1006,11 @@ def build_datasets(
     else:
         with open(data_args.meta_path, 'r') as f:
             ds_collections = jsonprocess.load(f)
+    
+    if output_dir is not None:
+        # save the ds_collections to a json file
+        with open(os.path.join(output_dir, 'training_data.json'), 'w') as f:
+            jsonprocess.dump(ds_collections, f, indent=4, ensure_ascii=False)
 
     for ds_idx, ds_name in enumerate(ds_collections.keys()):
         repeat_time = ds_collections[ds_name]['repeat_time']
@@ -1145,6 +1158,8 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
+    os.makedirs(training_args.output_dir, exist_ok=True)
+
     # Load pretrained model, tokenizer, and image processor
     tokenizer_path = model_args.model_name_or_path or model_args.llm_path
     logger.info(f'Loading Tokenizer: {tokenizer_path}')
@@ -1224,8 +1239,9 @@ def main():
     model.img_context_token_id = img_context_token_id
 
     if model_args.vision_path2 is not None:
-        logger.info('Loading VGGT Encoder...')
-        load_vggt_params_in_internvl(model, model_args.vision_path2)
+        # logger.info('Loading VGGT Encoder...')
+        # load_vggt_params_in_internvl(model, model_args.vision_path2)
+        logger.warn('Original VGGT params are used in stage 1, not in stage 2')
 
     assert model.config.downsample_ratio == data_args.down_sample_ratio
 
@@ -1271,7 +1287,7 @@ def main():
         dynamic_image_size=data_args.dynamic_image_size, use_thumbnail=data_args.use_thumbnail,
         min_dynamic_patch=data_args.min_dynamic_patch, max_dynamic_patch=data_args.max_dynamic_patch,
         normalize_type=data_args.normalize_type, min_num_frame=data_args.min_num_frame,
-        max_num_frame=data_args.max_num_frame)
+        max_num_frame=data_args.max_num_frame, output_dir=training_args.output_dir)
 
     def _freeze_params(module):
         for param in module.parameters():
@@ -1330,7 +1346,6 @@ def main():
 
     # Save model parameter information to params.txt
     params_file_path = os.path.join(training_args.output_dir, 'params.txt')
-    os.makedirs(training_args.output_dir, exist_ok=True)
 
     with open(params_file_path, 'w', encoding='utf-8') as f:
         f.write("Parameter_Name\tTensor_Size\tRequires_Grad\n")  # Header

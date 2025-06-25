@@ -4,7 +4,7 @@
     "annotation": "/mnt/chensenda/datas/internVL-SA1B-Caption/internVL_SA1B_Caption_995130.json",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.5,
     "length": 995130
   },
   "allava_instruct": {

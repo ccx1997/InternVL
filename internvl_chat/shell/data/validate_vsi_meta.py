@@ -1,3 +1,6 @@
+"""
+e.g.,  python shell/data/validate_vsi_meta.py --config shell/data/llava_video_178k_tmp.json --parallel 8 --skip-video-check --save
+"""
 import json
 import os
 import argparse
@@ -10,6 +13,8 @@ import tempfile
 from contextlib import contextmanager
 import sys
 from tqdm import tqdm
+import itertools
+from datetime import datetime
 
 
 @contextmanager
@@ -190,12 +195,13 @@ def get_conversation_value(conv):
         raise ValueError("Unknown conversation format")
 
 
-def validate_entry(entry, dataset_config):
+def validate_entry(entry, dataset_config, skip_video_check=False):
     """
     Validates a single entry from the annotation file.
     
     :param entry: The entry to validate
     :param dataset_config: Configuration for the dataset
+    :param skip_video_check: If True, skips video file validation
     """
     entry_id = entry.get('id', entry.get('question_id', 'unknown'))
     
@@ -286,10 +292,11 @@ def validate_entry(entry, dataset_config):
         else:  # video
             valid_extensions = ('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv')
         
-        for media_file in media_files:
-            if not media_file.lower().endswith(valid_extensions):
-                print(f"Invalid {media_type} file extension: {media_file} for entry {entry_id}")
-                return False
+        # There are some files without any extension, we don't check the extension
+        # for media_file in media_files:
+        #     if not media_file.lower().endswith(valid_extensions):
+        #         print(f"Invalid {media_type} file extension: {media_file} for entry {entry_id}")
+        #         return False
         
         # Check if placeholder count matches media file count
         if placeholder_count != len(media_files):
@@ -309,9 +316,10 @@ def validate_entry(entry, dataset_config):
                     print(f"Invalid {media_type} file: {actual_path} for entry {entry_id}")
                     return False
             else:  # video
-                if not check_video(actual_path):
-                    print(f"Invalid {media_type} file: {actual_path} for entry {entry_id}")
-                    return False
+                if not skip_video_check:
+                    if not check_video(actual_path):
+                        print(f"Invalid {media_type} file: {actual_path} for entry {entry_id}")
+                        return False
     else:
         # No media files, check if there are placeholders (should not have placeholders without media)
         if placeholder_count > 0:
@@ -359,48 +367,50 @@ def load_annotation_file(annotation_path):
     return entries
 
 
-def filter_valid_entries(entries, dataset_config, num_threads, quick_mode=False):
+QUICK_CHECK_COUNT = 1000
+
+
+def filter_valid_entries(entries, dataset_config, num_threads, quick_mode=False, skip_video_check=False):
     """
     Filter valid entries using parallel processing.
-    
+
     :param entries: List of entries to validate
     :param dataset_config: Dataset configuration
     :param num_threads: Number of threads for parallel processing
     :param quick_mode: If True, only validate first 100 entries
+    :param skip_video_check: If True, skips video file validation
     :return: List of valid entries, early_stop flag
     """
-    # In quick mode, only check first 100 entries
-    entries_to_check = entries[:1000] if quick_mode else entries
+    entries_to_check = entries[:QUICK_CHECK_COUNT] if quick_mode else entries
     
+    valid_entries = []
+    has_invalid = False
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = {executor.submit(validate_entry, entry, dataset_config): entry 
-                  for entry in entries_to_check}
+        # Use executor.map for better memory efficiency with large iterables
+        results = executor.map(validate_entry, entries_to_check, itertools.repeat(dataset_config), itertools.repeat(skip_video_check))
         
-        valid_entries = []
         with tqdm(total=len(entries_to_check), desc="Validating entries", unit="entry") as pbar:
-            for future in concurrent.futures.as_completed(futures):
-                entry = futures[future]
-                try:
-                    if future.result():
-                        valid_entries.append(entry)
-                    else:
-                        # In quick mode, if any entry is invalid, continue validation
-                        if quick_mode:
-                            print(f"\nFound invalid entry, continuing validation...")
-                except Exception as e:
-                    entry_id = entry.get('id', entry.get('question_id', 'unknown'))
-                    print(f"\nError validating entry {entry_id}: {e}")
+            for i, is_valid in enumerate(results):
+                if is_valid:
+                    valid_entries.append(entries_to_check[i])
+                else:
+                    has_invalid = True
+                    if quick_mode:
+                        print(f"\nFound invalid entry, stopping quick validation.")
+                        return valid_entries, False  # Early exit in quick mode
+
                 pbar.update(1)
-    
+
     # In quick mode, if all checked entries are valid, return all entries
-    if quick_mode and len(valid_entries) == len(entries_to_check):
-        print("\nQuick validation successful! All checked entries are valid.")
+    if quick_mode and not has_invalid:
+        print(f"\nQuick validation successful! All first {QUICK_CHECK_COUNT} entries are valid.")
         return entries, True
     
     return valid_entries, False
 
 
-def process_dataset(dataset_name, dataset_config, num_threads, save_results, output_dir, quick_mode=False):
+def process_dataset(dataset_name, dataset_config, num_threads, save_results, output_dir, quick_mode=False, skip_video_check=False):
     """
     Process a single dataset.
     
@@ -410,6 +420,7 @@ def process_dataset(dataset_name, dataset_config, num_threads, save_results, out
     :param save_results: Whether to save filtered results
     :param output_dir: Directory to save output files
     :param quick_mode: If True, only validate first 100 entries
+    :param skip_video_check: If True, skips video file validation
     :return: True if validation was successful (or quick validation passed)
     """
     annotation_path = dataset_config.get('annotation')
@@ -430,34 +441,41 @@ def process_dataset(dataset_name, dataset_config, num_threads, save_results, out
     
     total_entries = len(entries)
     if quick_mode:
-        print(f"Quick mode: Will validate first 100 entries out of {total_entries}")
+        print(f"Quick mode: Will validate first {QUICK_CHECK_COUNT} entries out of {total_entries}")
     else:
         print(f"Found {total_entries} entries to validate")
     
     # Filter valid entries
-    valid_entries, early_stop = filter_valid_entries(entries, dataset_config, num_threads, quick_mode)
+    valid_entries, early_stop = filter_valid_entries(entries, dataset_config, num_threads, quick_mode, skip_video_check)
     
     # Report results
     if early_stop:
         tag = "✅"
-        result_msg = f"{tag} Dataset {dataset_name}: Quick validation passed (first 100/{total_entries} entries valid)"
+        result_msg = f"{tag} Dataset {dataset_name}: Quick validation passed (first {QUICK_CHECK_COUNT}/{total_entries} entries valid)"
     else:
         tag = "✅" if len(valid_entries) == total_entries else "❌"
         result_msg = f"{tag} Dataset {dataset_name}: {len(valid_entries)} valid entries from {total_entries} total"
     
     print(f"\n{result_msg}")
+    # cached to a txt file
+    with open(os.path.join(output_dir, f"validation_log.txt"), 'a') as f:
+        f.write(result_msg + '\n')
     
     # Save results if requested and there are invalid entries
     if save_results and len(valid_entries) != total_entries and not early_stop:
-        output_path = os.path.join(output_dir, f"{dataset_name}_filtered.json")
-        os.makedirs(output_dir, exist_ok=True)
+        fn0, fn1 = os.path.splitext(annotation_path)
+        output_path = f"{fn0}_filtered{fn1}"
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(valid_entries, f, indent=2, ensure_ascii=False)
-            print(f"Filtered results saved to: {output_path}")
+            sav_info = f"Filtered results saved to: {output_path}"
         except Exception as e:
-            print(f"Error saving filtered results: {e}")
+            sav_info = f"Error saving filtered results: {e}"
+        print(sav_info)
+        with open(os.path.join(output_dir, f"validation_log.txt"), 'a') as f:
+            f.write(sav_info + '\n')
     
     return early_stop or len(valid_entries) == total_entries
 
@@ -470,7 +488,8 @@ def main():
     parser.add_argument("--save", action="store_true", help="Save filtered results")
     parser.add_argument("--output_dir", default="./filtered_results", help="Directory to save output files")
     parser.add_argument("--log", action="store_true", help="Enable logging to file")
-    parser.add_argument("--quick", action="store_true", help="Quick validation mode (only check first 100 entries)")
+    parser.add_argument("--quick", action="store_true", help="Quick validation mode (only check first 1000 entries)")
+    parser.add_argument("--skip-video-check", action="store_true", help="Skip the time-consuming video file validation.")
     
     args = parser.parse_args()
     
@@ -491,13 +510,16 @@ def main():
         log_file = os.path.join(args.output_dir, "validation_log.txt")
         os.makedirs(args.output_dir, exist_ok=True)
     
+    with open(os.path.join(args.output_dir, f"validation_log.txt"), 'a') as f:
+        f.write(f"\n\nValidation on {args.config}, started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
     # Process datasets
     datasets_to_process = args.datasets if args.datasets else list(config.keys())
     total_datasets = len(datasets_to_process)
     
     print(f"Starting validation of {total_datasets} datasets...")
     if args.quick:
-        print("Quick validation mode enabled (will check only first 100 entries per dataset)")
+        print(f"Quick validation mode enabled (will check only first {QUICK_CHECK_COUNT} entries per dataset)")
     
     for i, dataset_name in enumerate(datasets_to_process, 1):
         if dataset_name not in config:
@@ -512,7 +534,8 @@ def main():
                 args.parallel, 
                 args.save, 
                 args.output_dir,
-                args.quick
+                args.quick,
+                args.skip_video_check
             )
             if not success:
                 print(f"Dataset {dataset_name} validation failed")
@@ -523,4 +546,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()

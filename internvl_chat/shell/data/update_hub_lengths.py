@@ -61,6 +61,12 @@ def update_lengths(meta_file_path):
                     total_length += length * repeat_time
 
         item['length'] = int(total_length)
+    
+    # calculate the raw ratio of each item
+    total = sum(item['length'] for item in hub_data['data'])
+    for item in hub_data['data']:
+        raw_ratio = item['length'] / total
+        print(item['meta'], raw_ratio)
 
     with open(meta_file_path, 'w') as f:
         json.dump(hub_data, f, indent=4)
@@ -72,4 +78,4 @@ if __name__ == "__main__":
     parser.add_argument('meta_file', type=str, help='Path to the hub meta file.')
     args = parser.parse_args()
     
-    update_lengths(args.meta_file) 
+    update_lengths(args.meta_file)

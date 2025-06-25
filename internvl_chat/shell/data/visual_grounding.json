@@ -4,7 +4,7 @@
     "annotation": "/mnt/chengchangxu/data/Objects365/objects365_train_450k.json",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.4,
     "length": 450000
   },
   "boxcotrd": {

@@ -257,6 +257,10 @@ class InternVLChatModel(PreTrainedModel):
             input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds[:n_token]
             ignore_flag = True
 
+        del vit_embeds
+        if pixel_values2 is not None:
+            del img_embeds2
+            
         input_embeds = input_embeds.reshape(B, N, C)
 
         outputs = self.language_model(
@@ -360,9 +364,8 @@ class InternVLChatModel(PreTrainedModel):
     
     def extract_feature2(self, pixel_values2, attention_mask2):
         # extract features by a parallel encoder
-        with torch.no_grad():
-            self.vision_model2.eval()
-            img_embeds_list, patch_start_idx = self.vision_model2(pixel_values2, attention_mask=attention_mask2)
+        self.vision_model2.eval()
+        img_embeds_list, patch_start_idx = self.vision_model2(pixel_values2, attention_mask=attention_mask2)
         camera_pose_features = img_embeds_list[-1][:, :, 0:1]  # [B, S, 1, C]
         img_embeds2 = img_embeds_list[-1][:, :, patch_start_idx:]  # [B, S, P, C]
         del img_embeds_list
