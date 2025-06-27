@@ -76,7 +76,7 @@
     "annotation": "/mnt/chengchangxu/data/MMInstruct-GPT4V_filter_zh_222269.json",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.8,
     "length": 222266
   },
   "aokvqa": {

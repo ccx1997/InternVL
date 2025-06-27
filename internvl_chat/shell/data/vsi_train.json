@@ -11,14 +11,14 @@
     "annotation": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/training_data/camera_movement/v1_0/multispatialmllm_train.jsonl",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.7,
     "length": 750000
   },
   "roboSpatial": {
     "root": "",
     "annotation": "/mnt/chensenda/codes/RoboSpatial/scripts/training_data.jsonl",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.8,
     "length": 575098
   },
   "spacer_151k": {
@@ -27,5 +27,19 @@
     "data_augment": false,
     "repeat_time": 1,
     "length": 121313
+  },
+  "scanqa": {
+    "root": "",
+    "annotation": "/mnt/chensenda/codes/VLN/ScanQA/ScanQA_v1.0_train_reformat_std_video.json",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 25563
+  },
+  "sqa3d": {
+    "root": "",
+    "annotation": "/mnt/chensenda/codes/VLN/SQA3D/assets/data/sqa_task/balanced/train_reformat_std_video.json",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 26623
   }
 }

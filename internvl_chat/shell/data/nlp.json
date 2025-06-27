@@ -1,0 +1,50 @@
+{
+    "lava_code_feedback_filtered_45k": {
+        "root": "",
+        "annotation": "/mnt/chengchangxu/data/jsons/peter__data__text__code_feedback/lava_code_feedback_filtered_45k.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 46955
+    },
+    "lava_all_gpt4_51k_train": {
+        "root": "",
+        "annotation": "/mnt/chengchangxu/data/jsons/peter__highquality__wildchat__data/lava_all_gpt4_51k_train.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 45782
+    },
+    "allava_text": {
+        "root": "/mnt/liuyi/datasets/ALLAVA-4V",
+        "annotation": "/mnt/liuyi/datasets/ALLAVA-4V/allava_text/Evol-Instruct-GPT4-Turbo-143K.jsonl.checked.jsonl",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 142598
+    },
+    "mix_mathinstruct26k_metamathqa39k": {
+        "root": "",
+        "annotation": "/mnt/chengchangxu/data/jsons/peter__data__math/mix_mathinstruct26k_metamathqa39k.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 65690
+    },
+    "mix_open_orca_gpt4_20k_orca_math_100k_miu": {
+        "root": "",
+        "annotation": "/mnt/chengchangxu/data/jsons/peter__proj__mix0703/mix_open_orca_gpt4_20k_orca_math_100k_miu.json",
+        "data_dir": "/mnt/chengchangxu/data",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 47685
+    },
+    "lava_dolly_15k": {
+        "root": "",
+        "annotation": "/mnt/chengchangxu/data/jsons/peter__data__text__dolly/lava_dolly_15k.json",
+        "data_dir": "",
+        "data_augment": false,
+        "repeat_time": 1,
+        "length": 14972
+    }
+}

@@ -217,7 +217,7 @@ class InternVLChatModel(PreTrainedModel):
             img_embeds2 = self.extract_feature2(pixel_values2, attention_mask2)
             img_embeds2 = img_embeds2[image_flags2 == 1]
             # concat the 2 embeddings
-            if num_tiles is None:
+            if num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles):
                 vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
                 vit_embeds = vit_embeds.reshape(-1, C)
             else:
