@@ -1,6 +1,6 @@
 set -x
 
-# CUDA_VISIBLE_DEVICES=0,1,2,3
+# export CUDA_VISIBLE_DEVICES=0,1,2,3
 GPUS=${GPUS:-8}
 BATCH_SIZE=${BATCH_SIZE:-128}
 PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
@@ -12,9 +12,15 @@ export MASTER_PORT=34237
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 
-pretrained_model_path='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage1/checkpoint-10600'
+# pretrained_model_path='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage1/checkpoint-10600'
+pretrained_model_path='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400'
 vision_path2='/mnt/models/VGGT-1B/model.pt'
-OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2'
+OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_2'
+
+# copy current script to output directory
+mkdir -p "$OUTPUT_DIR"
+cp "$0" "$OUTPUT_DIR/"
+
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   mkdir -p "$OUTPUT_DIR"
@@ -56,9 +62,9 @@ torchrun \
   --gradient_accumulation_steps ${GRADIENT_ACC} \
   --evaluation_strategy "no" \
   --save_strategy "steps" \
-  --save_steps 200 \
+  --save_steps 400 \
   --save_total_limit 1 \
-  --learning_rate 2e-5 \
+  --learning_rate 1.5e-5 \
   --weight_decay 0.01 \
   --warmup_ratio 0.01 \
   --lr_scheduler_type "cosine" \

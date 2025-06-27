@@ -872,7 +872,7 @@ class LazySupervisedDataset(Dataset):
             pixel_values=pixel_values,
             pixel_values2=pixel_values2,
             image_flags=torch.tensor([0] * num_patches, dtype=torch.long),
-            image_flags2=torch.tensor([1] * pixel_values2.size(0), dtype=torch.long),
+            image_flags2=torch.tensor([0] * pixel_values2.size(0), dtype=torch.long),
             num_tiles=None,
         )
         return ret

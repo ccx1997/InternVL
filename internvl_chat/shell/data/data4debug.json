@@ -13,5 +13,13 @@
     "data_augment": false,
     "repeat_time": 1,
     "length": 131153
+  },
+  "lava_all_gpt4_51k_train": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/jsons/peter__highquality__wildchat__data/lava_all_gpt4_51k_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 45782
   }
 }

@@ -14,7 +14,7 @@ export LAUNCHER=pytorch
 export NCCL_DEBUG=WARN
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-pretrained_model_path='/mnt/models/InternVL3-8B'
+pretrained_model_path='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400'
 vision_path2='/mnt/models/VGGT-1B/model.pt'
 OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl2_5_8b_debug'
 
@@ -34,7 +34,7 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/llava_video_178k.json" \
+  --meta_path "./shell/data/data4debug.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
   --max_dynamic_patch 6 \
@@ -68,6 +68,6 @@ torchrun \
   --dynamic_image_size False \
   --use_thumbnail True \
   --ps_version 'v2' \
-  --deepspeed "zero_stage1_config.json" \
+  --deepspeed "zero_stage3_config_34b.json" \
   --report_to "tensorboard" \
   2>&1 | tee -a "${OUTPUT_DIR}/training_log.txt"
