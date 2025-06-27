@@ -486,7 +486,7 @@ def main():
     parser.add_argument("--datasets", nargs='*', help="Specific datasets to process (process all if not specified)")
     parser.add_argument("--parallel", type=int, default=4, help="Number of threads for parallel processing")
     parser.add_argument("--save", action="store_true", help="Save filtered results")
-    parser.add_argument("--output_dir", default="./filtered_results", help="Directory to save output files")
+    parser.add_argument("--output_dir", default="./", help="Directory to save output files")
     parser.add_argument("--log", action="store_true", help="Enable logging to file")
     parser.add_argument("--quick", action="store_true", help="Quick validation mode (only check first 1000 entries)")
     parser.add_argument("--skip-video-check", action="store_true", help="Skip the time-consuming video file validation.")
