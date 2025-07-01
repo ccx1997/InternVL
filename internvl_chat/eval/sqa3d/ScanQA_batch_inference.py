@@ -2,11 +2,11 @@
 """
 Batch inference script for ScanQA dataset using InternVL Chat Dual Encoder
 """
-
+import sys
+sys.path.append('/mnt/chensenda/codes/VLN/InternVL/internvl_chat')
+import os
 import argparse
 import json
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '5'
 import sys
 import time
 import torch
@@ -29,6 +29,9 @@ from simple_inference_demo import (
     preprocess_images,
     simple_chat
 )
+
+# Set CUDA device after imports to override any settings from imported modules
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 
 class GPUMonitor:
@@ -181,23 +184,12 @@ def process_single_sample(model, tokenizer, sample: Dict[str, Any],
     try:
         # Extract info from sample
         sample_id = sample['id']
-        image_paths = sample['image']
+        video_path = sample['video']  # Changed: now treat as single video file path
         question = extract_question_from_conversations(sample['conversations'])
         
-        # Uniformly sample 16 images from the image list
-        sampled_image_paths = uniform_sample_images(image_paths, args.num_frames)
-        
-        # Load images
-        imgs = []
-        for img_path in sampled_image_paths:
-            if os.path.exists(img_path):
-                img = load_image(img_path)
-                imgs.append(img)
-            else:
-                print(f"Warning: Image not found: {img_path}")
-        
-        if not imgs:
-            print(f"Warning: No valid images found for sample {sample_id}")
+        # Check if video file exists
+        if not os.path.exists(video_path):
+            print(f"Warning: Video file not found: {video_path}")
             # Return sample with empty internVL response
             result_sample = sample.copy()
             result_sample['conversations'].append({
@@ -206,13 +198,29 @@ def process_single_sample(model, tokenizer, sample: Dict[str, Any],
             })
             return result_sample
         
-        # Create frame info for multiple images
+        # Load video frames using the same method as simple_inference_demo.py
+        imgs = load_video_frames(video_path,
+                                min_frames=args.num_frames,
+                                max_frames=args.num_frames,
+                                sampling='rand')
+        
+        if not imgs:
+            print(f"Warning: Failed to load video frames for sample {sample_id}")
+            # Return sample with empty internVL response
+            result_sample = sample.copy()
+            result_sample['conversations'].append({
+                'from': 'internVL',
+                'value': ""
+            })
+            return result_sample
+        
+        # Create frame info for multiple video frames (same as simple_inference_demo.py)
         frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
         q = question.replace('<video>', frame_info) if '<video>' in question \
             else frame_info + '\n' + question
         
-        # For multiple images, use smaller max_patches per image
-        max_patches = 1  # Since we have multiple images, use 1 patch per image
+        # For video frames, use smaller max_patches per frame (same as simple_inference_demo.py)
+        max_patches = 1  # Since we have multiple video frames, use 1 patch per frame
         
         # Preprocess
         pv1, pv2 = preprocess_images(imgs,
@@ -252,21 +260,21 @@ def process_single_sample(model, tokenizer, sample: Dict[str, Any],
 def main():
     parser = argparse.ArgumentParser(description='Batch inference for ScanQA dataset')
     parser.add_argument('--checkpoint', 
-                        default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-3600',
+                        default='/mnt/models/InternVL3-8B',
                         help='Path to dual-encoder checkpoint')
     parser.add_argument('--dataset', 
-                        default='/mnt/chensenda/codes/VLN/ScanQA/ScanQA_v1.0_val_reformat_std.json',
+                        default='/mnt/chensenda/codes/VLN/SQA3D/assets/data/sqa_task/balanced/test_reformat_std_video.json',
                         help='Path to ScanQA dataset')
     parser.add_argument('--data-root',
                         default='',  # Not needed since paths are absolute in the dataset
-                        help='Root directory for image files (not used as paths are absolute)')
+                        help='Root directory for video files (not used as paths are absolute)')
     parser.add_argument('--output', 
                         default='scanqa_predictions.json',
                         help='Output file for predictions')
     parser.add_argument('--num-frames', type=int, default=12,
-                        help='Number of frames to sample uniformly from image list')
+                        help='Number of frames to sample from each video file')
     parser.add_argument('--max-patches', type=int, default=1,
-                        help='Dynamic patches per image')
+                        help='Dynamic patches per video frame')
     parser.add_argument('--max-tokens', type=int, default=512,
                         help='Maximum generation length')
     parser.add_argument('--start-idx', type=int, default=0,
@@ -305,7 +313,7 @@ def main():
     
     for sample in tqdm(dataset_subset, desc="Processing samples"):
         count += 1
-        if count > 10:
+        if count > 1000:
             break
         
         # Record start time for this iteration

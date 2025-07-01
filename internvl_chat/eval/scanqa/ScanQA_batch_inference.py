@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Batch inference script for VSI-Bench dataset using InternVL Chat Dual Encoder
+Batch inference script for ScanQA dataset using InternVL Chat Dual Encoder
 """
-
+import sys
+sys.path.append('/mnt/chensenda/codes/VLN/InternVL/internvl_chat')
+import os
 import argparse
 import json
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '5'
 import sys
 import time
 import torch
@@ -29,6 +29,9 @@ from simple_inference_demo import (
     preprocess_images,
     simple_chat
 )
+
+# Set CUDA device after imports to override any settings from imported modules
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 
 class GPUMonitor:
@@ -143,19 +146,15 @@ class GPUMonitor:
         print("="*50)
 
 
-def load_jsonl(file_path: str) -> List[Dict[str, Any]]:
-    """Load JSONL file and return list of records"""
-    data = []
+def load_json(file_path: str) -> List[Dict[str, Any]]:
+    """Load JSON file and return list of records"""
     with open(file_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                data.append(json.loads(line))
+        data = json.load(f)
     return data
 
 
 def extract_question_from_conversations(conversations: List[Dict]) -> str:
-    """Extract question from conversations"""
+    """Extract question from ScanQA conversations"""
     for conv in conversations:
         if conv.get('from') == 'human':
             # Remove <video> token from question 
@@ -164,40 +163,64 @@ def extract_question_from_conversations(conversations: List[Dict]) -> str:
     return ""
 
 
+def uniform_sample_images(image_paths: List[str], num_frames: int = 16) -> List[str]:
+    """Uniformly sample num_frames images from the image path list"""
+    if len(image_paths) <= num_frames:
+        return image_paths
+    
+    # Calculate step size for uniform sampling
+    step = (len(image_paths) - 1) / (num_frames - 1)
+    sampled_indices = [int(round(i * step)) for i in range(num_frames)]
+    
+    # Ensure the last index is included
+    sampled_indices[-1] = len(image_paths) - 1
+    
+    return [image_paths[i] for i in sampled_indices]
+
+
 def process_single_sample(model, tokenizer, sample: Dict[str, Any], 
                          data_root: str, args) -> Dict[str, Any]:
-    """Process a single sample and return prediction"""
+    """Process a single sample and return prediction with ScanQA format"""
     try:
         # Extract info from sample
         sample_id = sample['id']
-        video_path = os.path.join(data_root, sample['video'])
+        video_path = sample['video']  # Changed: now treat as single video file path
         question = extract_question_from_conversations(sample['conversations'])
         
+        # Check if video file exists
         if not os.path.exists(video_path):
-            print(f"Warning: Video not found: {video_path}")
-            return {"idx": sample_id, "prediction": ""}
+            print(f"Warning: Video file not found: {video_path}")
+            # Return sample with empty internVL response
+            result_sample = sample.copy()
+            result_sample['conversations'].append({
+                'from': 'internVL',
+                'value': ""
+            })
+            return result_sample
         
-        # Load media
-        if video_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
-            # Video processing
-            imgs = load_video_frames(video_path,
-                                   min_frames=args.num_frames,
-                                   max_frames=args.num_frames,
-                                   sampling='rand')
-            if not imgs:
-                print(f"Warning: Failed to load video: {video_path}")
-                return {"idx": sample_id, "prediction": ""}
-            
-            # Create frame info for video
-            frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
-            q = question.replace('<video>', frame_info) if '<video>' in question \
-                else frame_info + '\n' + question
-            max_patches = 1
-        else:
-            # Image processing
-            imgs = [load_image(video_path)]
-            q = '<image>\n' + question if '<image>' not in question else question
-            max_patches = args.max_patches
+        # Load video frames using the same method as simple_inference_demo.py
+        imgs = load_video_frames(video_path,
+                                min_frames=args.num_frames,
+                                max_frames=args.num_frames,
+                                sampling='rand')
+        
+        if not imgs:
+            print(f"Warning: Failed to load video frames for sample {sample_id}")
+            # Return sample with empty internVL response
+            result_sample = sample.copy()
+            result_sample['conversations'].append({
+                'from': 'internVL',
+                'value': ""
+            })
+            return result_sample
+        
+        # Create frame info for multiple video frames (same as simple_inference_demo.py)
+        frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
+        q = question.replace('<video>', frame_info) if '<video>' in question \
+            else frame_info + '\n' + question
+        
+        # For video frames, use smaller max_patches per frame (same as simple_inference_demo.py)
+        max_patches = 1  # Since we have multiple video frames, use 1 patch per frame
         
         # Preprocess
         pv1, pv2 = preprocess_images(imgs,
@@ -211,31 +234,47 @@ def process_single_sample(model, tokenizer, sample: Dict[str, Any],
         answer = simple_chat(model, tokenizer, pv1, pv2,
                            question=q, max_tokens=args.max_tokens)
         
-        return {"idx": sample_id, "prediction": answer.strip()}
+        # Prepare result in ScanQA format with conversations
+        result_sample = sample.copy()
+        
+        # Add internVL response to conversations
+        result_sample['conversations'].append({
+            'from': 'internVL',
+            'value': answer.strip()
+        })
+        
+        return result_sample
         
     except Exception as e:
         print(f"Error processing sample {sample.get('id', 'unknown')}: {e}")
-        return {"idx": sample.get('id', 0), "prediction": ""}
+        result_sample = sample.copy()
+        
+        # Add empty internVL response on error
+        result_sample['conversations'].append({
+            'from': 'internVL',
+            'value': ""
+        })
+        return result_sample
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Batch inference for VSI-Bench dataset')
+    parser = argparse.ArgumentParser(description='Batch inference for ScanQA dataset')
     parser.add_argument('--checkpoint', 
-                        default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-3600',
+                        default='/mnt/models/InternVL3-8B',
                         help='Path to dual-encoder checkpoint')
     parser.add_argument('--dataset', 
-                        default='/mnt/chengchangxu/data/VSI-Bench/vsi_bench_test.jsonl',
-                        help='Path to VSI-Bench test dataset')
+                        default='/mnt/chensenda/codes/VLN/ScanQA/ScanQA_v1.0_val_reformat_std_video.json',
+                        help='Path to ScanQA dataset')
     parser.add_argument('--data-root',
-                        default='/mnt/chengchangxu/data/VSI-Bench/',
-                        help='Root directory for video/image files')
+                        default='',  # Not needed since paths are absolute in the dataset
+                        help='Root directory for video files (not used as paths are absolute)')
     parser.add_argument('--output', 
-                        default='vsi_bench_predictions.json',
+                        default='scanqa_predictions_internvl3_8b.json',
                         help='Output file for predictions')
-    parser.add_argument('--num-frames', type=int, default=16,
-                        help='Number of video frames to sample')
-    parser.add_argument('--max-patches', type=int, default=4,
-                        help='Dynamic patches per image')
+    parser.add_argument('--num-frames', type=int, default=12,
+                        help='Number of frames to sample from each video file')
+    parser.add_argument('--max-patches', type=int, default=1,
+                        help='Dynamic patches per video frame')
     parser.add_argument('--max-tokens', type=int, default=512,
                         help='Maximum generation length')
     parser.add_argument('--start-idx', type=int, default=0,
@@ -257,7 +296,7 @@ def main():
 
     # Load dataset
     print(f"Loading dataset from {args.dataset}")
-    dataset = load_jsonl(args.dataset)
+    dataset = load_json(args.dataset)
     print(f"Loaded {len(dataset)} samples")
     
     # Determine processing range
@@ -273,11 +312,9 @@ def main():
     total_start_time = time.time()
     
     for sample in tqdm(dataset_subset, desc="Processing samples"):
-        if sample['type'] !="object_counting":
-            continue
         count += 1
-        # if count > 50:
-        #     break
+        if count > 1000:
+            break
         
         # Record start time for this iteration
         iter_start_time = time.time()
@@ -294,7 +331,16 @@ def main():
         if len(results) % 50 == 0:
             elapsed_time = time.time() - total_start_time
             samples_per_sec = len(results) / elapsed_time
-            print(f"Processed {len(results)} samples. Latest: idx={result['idx']}, prediction='{result['prediction'][:50]}...', Speed: {samples_per_sec:.2f} samples/sec")
+            # Get the internVL response for progress display
+            internvl_response = ""
+            if 'conversations' in result:
+                for conv in result['conversations']:
+                    if conv.get('from') == 'internVL':
+                        internvl_response = conv.get('value', '')
+                        break
+            
+            sample_id = result.get('id', 'unknown')
+            print(f"Processed {len(results)} samples. Latest: id={sample_id}, prediction='{internvl_response[:50]}...', Speed: {samples_per_sec:.2f} samples/sec")
     
     # Print GPU performance statistics
     if gpu_monitor:
