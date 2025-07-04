@@ -12,7 +12,7 @@ python demo_internvl_dual.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Commented out to avoid conflicts with other scripts
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 import random
 import warnings
 from typing import List, Union
@@ -24,6 +24,7 @@ import torch
 from decord import VideoReader
 from PIL import Image
 from transformers import AutoTokenizer, GenerationConfig
+import gradio as gr
 
 from internvl.model import InternVLChatConfig, InternVLChatModel
 from internvl.train.dataset import build_transform, dynamic_preprocess
@@ -42,6 +43,10 @@ BOX_START_TOKEN = '<box>'
 BOX_END_TOKEN = '</box>'
 
 warnings.filterwarnings('ignore')
+
+# Global variables for model and tokenizer
+global_model = None
+global_tokenizer = None
 
 
 # ------------------------------------------------------------------
@@ -506,69 +511,238 @@ def simple_chat(model, tokenizer,
                       verbose=True)
 
 
+# ------------------------------------------------------------------
+# 6. Gradio Interface Functions
+# ------------------------------------------------------------------
+def initialize_model(checkpoint_path):
+    """Initialize the model and tokenizer"""
+    global global_model, global_tokenizer
+    
+    if global_model is None:
+        print("Loading model for the first time...")
+        global_model, global_tokenizer = load_model_and_tokenizer(checkpoint_path)
+        global_model = patch_model_chat_method(global_model)
+        print("Model loaded successfully!")
+    
+    return global_model, global_tokenizer
+
+
+def predict(image_video_file, file_path_input, question, num_frames, max_patches, max_tokens):
+    """Main prediction function for Gradio interface"""
+    try:
+        # Determine which input to use: uploaded file or file path
+        if image_video_file is not None:
+            file_path = image_video_file
+            print(f"Using uploaded file: {file_path}")
+        elif file_path_input and file_path_input.strip():
+            file_path = file_path_input.strip()
+            print(f"Using server file path: {file_path}")
+        else:
+            return "Please either upload a file or enter a file path."
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return f"File not found: {file_path}"
+        
+        if not question.strip():
+            return "Please enter a question."
+        
+        # Get model and tokenizer
+        global global_model, global_tokenizer
+        if global_model is None:
+            model, tokenizer = initialize_model(
+                '/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400'
+            )
+        else:
+            model = global_model
+            tokenizer = global_tokenizer
+        
+        # Get file extension
+        file_ext = file_path.lower()
+        
+        # Load media based on file type
+        if file_ext.endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
+            # Video processing
+            imgs = load_video_frames(file_path,
+                                   min_frames=num_frames,
+                                   max_frames=num_frames,
+                                   sampling='rand')
+            if not imgs:
+                return "Failed to load video frames."
+            
+            frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
+            q = question.replace('<video>', frame_info) if '<video>' in question \
+                else frame_info + '\n' + question
+            max_patches = 1  # For video, use 1 patch per frame
+        else:
+            # Image processing
+            try:
+                imgs = [load_image(file_path)]
+                q = '<image>\n' + question if '<image>' not in question else question
+            except Exception as e:
+                return f"Failed to load image: {str(e)}"
+        
+        # Preprocess images/frames
+        print("Preprocessing images/frames...")
+        pv1, pv2 = preprocess_images(imgs,
+                                   image_size=model.config.force_image_size
+                                   or model.config.vision_config.image_size,
+                                   dynamic_size=True,
+                                   use_thumbnail=model.config.use_thumbnail,
+                                   max_patches=max_patches)
+        
+        print(f"Encoder-1 tensor: {tuple(pv1.shape)}")
+        print(f"Encoder-2 tensor: {tuple(pv2.shape)}")
+        
+        # Generate response
+        print("Generating response...")
+        answer = simple_chat(model, tokenizer, pv1, pv2,
+                           question=q, max_tokens=max_tokens)
+        
+        return answer
+        
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def create_gradio_interface():
+    """Create and configure the Gradio interface"""
+    
+    def process_request(image_video_file, file_path_input, question, num_frames, max_patches, max_tokens):
+        return predict(image_video_file, file_path_input, question, int(num_frames), int(max_patches), int(max_tokens))
+    
+    def clear_inputs():
+        return None, "", "Describe what you see in detail.", 8, 6, 512
+    
+    # Create interface using gr.Interface instead of gr.Blocks
+    interface = gr.Interface(
+        fn=process_request,
+        inputs=[
+            gr.File(label="Upload Image or Video (Option 1)"),
+            gr.Textbox(label="Or Enter File Path on Server (Option 2)", placeholder="/path/to/your/image_or_video.jpg", lines=1),
+            gr.Textbox(label="Question", value="Describe what you see in detail.", lines=3),
+            gr.Number(label="Number of Frames (for video)", value=8, minimum=4, maximum=32),
+            gr.Number(label="Max Patches (for image)", value=6, minimum=1, maximum=12), 
+            gr.Number(label="Max Tokens", value=512, minimum=50, maximum=2048)
+        ],
+        outputs=gr.Textbox(label="Response", lines=10),
+        title="InternVL-Chat Dual Encoder Demo",
+        description="**Two ways to input files:**\n1. Upload a file using the upload button\n2. Enter the file path on the server\n\n**Example questions:** 'Describe what you see in detail.', 'What is the main subject?', 'What actions are happening?'\n\n**Supported formats:** JPG, PNG, MP4, AVI, MOV, MKV, GIF",
+        allow_flagging="never"
+    )
+    
+    return interface
+
+
 def main():
     parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-3600',
+    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400',
                         help='Path to dual‑encoder checkpoint')
-    parser.add_argument('--input', required=True,
-                        help='Image / video path')
-    parser.add_argument('--question', default='Describe what you see in detail.',
-                        help='Prompt for the model')
-    parser.add_argument('--num-frames', type=int, default=12,
+    parser.add_argument('--input', 
+                        help='Image / video path (for CLI mode)')
+    parser.add_argument('--question',
+                        help='Prompt for the model (for CLI mode)')
+    parser.add_argument('--num-frames', type=int, default=8,
                         help='Num video frames (sampling)')
     parser.add_argument('--max-patches', type=int, default=6,
                         help='Dynamic patches per image')
     parser.add_argument('--max-tokens', type=int, default=512,
                         help='Generation length')
-    args = parser.parse_args()
-
-    if not os.path.exists(args.input):
-        raise FileNotFoundError(args.input)
-
-    # ---- load model ----
-    model, tok = load_model_and_tokenizer(args.checkpoint)
-    model = patch_model_chat_method(model)
-
-    # ---- load media ----
-    inp = args.input.lower()
-    if inp.endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
-        imgs = load_video_frames(args.input,
-                                 min_frames=args.num_frames,
-                                 max_frames=args.num_frames,
-                                 sampling='rand')
-        if not imgs:
-            raise RuntimeError("Video load failed")
-        frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
-        q = args.question.replace('<video>', frame_info) if '<video>' in args.question \
-            else frame_info + '\n' + args.question
-
-        args.max_patches=1
-    else:
-        imgs = [load_image(args.input)]
-        q = '<image>\n' + args.question if '<image>' not in args.question else args.question
-
-    # ---- preprocess ----
-    print("⇢ Preprocessing images / frames")
+    parser.add_argument('--ui', action='store_true',
+                        help='Launch Gradio UI (default mode)')
+    parser.add_argument('--cli', action='store_true',
+                        help='Run in CLI mode instead of UI')
+    parser.add_argument('--share', action='store_true', 
+                        help='Create shareable Gradio link (default: True)')
+    parser.add_argument('--no-share', dest='share', action='store_false',
+                        help='Disable shareable Gradio link')
+    parser.set_defaults(share=True)
+    parser.add_argument('--port', type=int, default=17861,
+                        help='Port for Gradio interface')
     
-    pv1, pv2 = preprocess_images(imgs,
-                                 image_size=model.config.force_image_size
-                                 or model.config.vision_config.image_size,
-                                 dynamic_size=True,
-                                 use_thumbnail=model.config.use_thumbnail,
-                                 max_patches=args.max_patches)
-    print(f"Encoder‑1 tensor : {tuple(pv1.shape)}")
-    print(f"Encoder‑2 tensor : {tuple(pv2.shape)}")
+    args = parser.parse_args()
+    
+    # Determine mode: CLI or UI
+    if args.cli and args.input:
+        # CLI mode - original functionality
+        if not os.path.exists(args.input):
+            raise FileNotFoundError(args.input)
 
-    # ---- inference ----
-    print("⇢ Generating ...")
-    answer = simple_chat(model, tok, pv1, pv2,
-                         question=q, max_tokens=args.max_tokens)
+        # ---- load model ----
+        model, tok = load_model_and_tokenizer(args.checkpoint)
+        model = patch_model_chat_method(model)
 
-    print("\n" + "=" * 60)
-    print("RESPONSE:")
-    print("=" * 60)
-    print(answer)
-    print("=" * 60)
+        # ---- load media ----
+        inp = args.input.lower()
+        if inp.endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
+            imgs = load_video_frames(args.input,
+                                     min_frames=args.num_frames,
+                                     max_frames=args.num_frames,
+                                     sampling='rand')
+            if not imgs:
+                raise RuntimeError("Video load failed")
+            frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
+            q = args.question.replace('<video>', frame_info) if '<video>' in args.question \
+                else frame_info + '\n' + args.question
+
+            args.max_patches=1
+        else:
+            imgs = [load_image(args.input)]
+            q = '<image>\n' + args.question if '<image>' not in args.question else args.question
+
+        # ---- preprocess ----
+        print("⇢ Preprocessing images / frames")
+        
+        pv1, pv2 = preprocess_images(imgs,
+                                     image_size=model.config.force_image_size
+                                     or model.config.vision_config.image_size,
+                                     dynamic_size=True,
+                                     use_thumbnail=model.config.use_thumbnail,
+                                     max_patches=args.max_patches)
+        print(f"Encoder‑1 tensor : {tuple(pv1.shape)}")
+        print(f"Encoder‑2 tensor : {tuple(pv2.shape)}")
+
+        # ---- inference ----
+        print("⇢ Generating ...")
+        answer = simple_chat(model, tok, pv1, pv2,
+                             question=q, max_tokens=args.max_tokens)
+
+        print("\n" + "=" * 60)
+        print("RESPONSE:")
+        print("=" * 60)
+        print(answer)
+        print("=" * 60)
+    
+    else:
+        # UI mode - default
+        print("Launching Gradio interface...")
+        
+        # Pre-initialize model to avoid long wait on first request
+        try:
+            initialize_model(args.checkpoint)
+        except Exception as e:
+            print(f"Warning: Failed to pre-initialize model: {e}")
+            print("Model will be loaded on first request.")
+        
+        # Create and launch interface
+        demo = create_gradio_interface()
+        
+        print(f"Starting Gradio interface on port {args.port}")
+        print("If you see any errors, the public link should still work.")
+        
+        try:
+            demo.launch(
+                share=args.share,
+                server_port=args.port,
+                server_name="0.0.0.0",  # Use 0.0.0.0 for better remote access
+                show_error=True,
+                quiet=False,
+                inbrowser=False  # Don't try to open browser automatically
+            )
+        except Exception as e:
+            print(f"Error launching interface: {e}")
+            print("Trying with minimal configuration...")
+            demo.launch(share=True, server_port=args.port)
 
 
 if __name__ == '__main__':
