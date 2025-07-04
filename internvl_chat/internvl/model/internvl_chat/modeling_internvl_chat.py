@@ -92,6 +92,7 @@ class InternVLChatModel(PreTrainedModel):
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
 
+        self.vision_pool = nn.AvgPool2d(kernel_size=2, stride=2)
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
             nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio) ** 2, llm_hidden_size),
@@ -105,6 +106,7 @@ class InternVLChatModel(PreTrainedModel):
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size)
         )
+        self.vision_pool2 = nn.AvgPool2d(kernel_size=2, stride=2)
         self.mlp2_camera = nn.Sequential(
             nn.LayerNorm(embed_dim2 * 2),
             nn.Linear(embed_dim2 * 2, llm_hidden_size),
@@ -360,6 +362,11 @@ class InternVLChatModel(PreTrainedModel):
         vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         vit_embeds = self.mlp1(vit_embeds)
+        h1 = w1 = int(vit_embeds.shape[1] ** 0.5)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h1, w1, -1).permute(0, 3, 1, 2)
+        vit_embeds = self.vision_pool(vit_embeds)
+        vit_embeds = vit_embeds.permute(0, 2, 3, 1)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         return vit_embeds
     
     def extract_feature2(self, pixel_values2, attention_mask2):
@@ -383,6 +390,14 @@ class InternVLChatModel(PreTrainedModel):
         # project
         img_embeds2 = self.mlp2_patch(img_embeds2)
         camera_pose_features = self.mlp2_camera(camera_pose_features)
+        # pool
+        N, T, D = img_embeds2.shape
+        w_or_h = int(T ** 0.5)
+        img_embeds2 = img_embeds2.permute(0, 2, 1).reshape(N, D, w_or_h, w_or_h)
+        img_embeds2 = torch.cat([img_embeds2, img_embeds2[:, :, -1:, :]], dim=2)
+        img_embeds2 = torch.cat([img_embeds2, img_embeds2[:, :, :, -1:]], dim=-1)
+        img_embeds2 = self.vision_pool2(img_embeds2)
+        img_embeds2 = img_embeds2.permute(0, 2, 3, 1).reshape(N, -1, D)
         # concat
         img_embeds2 = torch.cat([camera_pose_features, img_embeds2], dim=1) # [N, 1+T, E]
         return img_embeds2

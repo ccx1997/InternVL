@@ -495,7 +495,8 @@ class LazySupervisedDataset(Dataset):
         self.max_dynamic_patch = max_dynamic_patch
         self.normalize_type = normalize_type
 
-        self.num_img2_tokens = 13 * 13 + 1 # patch tokens and 1 camera token
+        # self.num_img2_tokens = 13 * 13 + 1 # patch tokens and 1 camera token
+        self.num_img2_tokens = 7 * 7 + 1 # patch tokens and 1 camera token
 
         # If the precomputed length does not exist, roughly estimate the length of
         # each sample to improve the efficiency of group_by_length.
@@ -1265,7 +1266,7 @@ def main():
                                                  patch_size=patch_size)
         model.config.vision_config.image_size = data_args.force_image_size
     model.config.force_image_size = data_args.force_image_size
-    model.num_image_token = int((data_args.force_image_size // patch_size) ** 2 * (data_args.down_sample_ratio ** 2))
+    model.num_image_token = int((data_args.force_image_size // patch_size) ** 2 * (data_args.down_sample_ratio ** 2)) // 4
 
     if num_new_tokens > 0:
         model.language_model.resize_token_embeddings(len(tokenizer))

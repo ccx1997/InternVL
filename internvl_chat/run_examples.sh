@@ -1,4 +1,5 @@
 conda activate internvl_env
+python simple_inference_demo.py --input /mnt/chengchangxu/data/VSI-Bench/arkitscenes/41159504.mp4 --question "If I am standing by the bathtub and facing the table, is the toilet to my front-left, front-right, back-left, or back-right?\nThe directions refer to the quadrants of a Cartesian plane (if I am standing at the origin and facing along the positive y-axis).\nA. back-left\nB. back-right\nC. front-right\nD. front-left" # D
 python simple_inference_demo.py     --input /mnt/chensenda/codes/VLN/InternVL/internvl_chat/examples/image1.jpg    --question "Describe what you see in this image"
 python simple_inference_demo.py     --input /mnt/chengchangxu/data/VSI-Bench/arkitscenes/41069025.mp4    --question "<video>\nHow many table(s) are in this room?"
 
