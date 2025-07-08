@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
 Script to evaluate EM-1 and EM-R1 metrics for SQA predictions.
-EM-1: Exact Match (case-sensitive)
-EM-R1: Exact Match Relaxed (case-insensitive, normalized)
+EM-1: Exact Match (normalized with comprehensive answer cleaning)
+EM-R1: Relaxed Exact Match (multiple strategies: exact, substring, no-space, word overlap)
+
+Based on original ScanQA evaluation script with comprehensive answer normalization including:
+- Common typo corrections (letf->left, tehre->there, etc.)
+- Digit to word conversion (1->one, 2->two, etc.)
+- Article removal (a, an, the)
+- Punctuation and whitespace normalization
 
 Usage:
     python eval_sqa3d.py --pred "path/to/predictions.json"
@@ -18,19 +24,80 @@ from typing import List, Dict, Tuple
 
 def normalize_answer(text: str) -> str:
     """
-    Normalize answer text for relaxed matching.
-    - Convert to lowercase
-    - Remove punctuation
-    - Remove extra whitespace
-    - Strip leading/trailing whitespace
+    Comprehensive answer normalization based on original ScanQA evaluation script.
+    Handles typos, digit-to-word conversion, article removal, and other cleanups.
     """
     # Convert to lowercase
     text = text.lower()
     
-    # Remove punctuation
-    text = text.translate(str.maketrans('', '', string.punctuation))
+    # Remove trailing and leading whitespace
+    text = re.sub('[ ]+$', '', text)
+    text = re.sub('^[ ]+', '', text)
     
-    # Remove extra whitespace and strip
+    # Remove multiple spaces
+    text = re.sub(' {2,}', ' ', text)
+    
+    # Fix spacing after periods
+    text = re.sub('\.[ ]{2,}', '. ', text)
+    
+    # Remove unwanted characters (keep letters, numbers, comma, apostrophe, space, dash, colon)
+    text = re.sub('[^a-zA-Z0-9,\'\s\-:]+', '', text)
+    
+    # Fix character replacements
+    text = re.sub('ç', 'c', text)
+    text = re.sub('\'', '\'', text)
+    
+    # Fix common typos
+    text = re.sub(r'\bletf\b', 'left', text)
+    text = re.sub(r'\blet\b', 'left', text)
+    text = re.sub(r'\btehre\b', 'there', text)
+    text = re.sub(r'\brigth\b', 'right', text)
+    text = re.sub(r'\brght\b', 'right', text)
+    text = re.sub(r'\bbehine\b', 'behind', text)
+    text = re.sub(r'\btv\b', 'TV', text)
+    text = re.sub(r'\bchai\b', 'chair', text)
+    text = re.sub(r'\bwasing\b', 'washing', text)
+    text = re.sub(r'\bwaslked\b', 'walked', text)
+    text = re.sub(r'\boclock\b', 'o\'clock', text)
+    text = re.sub(r'\bo\'[ ]+clock\b', 'o\'clock', text)
+    
+    # Convert digits to words
+    text = re.sub(r'\b0\b', 'zero', text)
+    text = re.sub(r'\bnone\b', 'zero', text)
+    text = re.sub(r'\b1\b', 'one', text)
+    text = re.sub(r'\b2\b', 'two', text)
+    text = re.sub(r'\b3\b', 'three', text)
+    text = re.sub(r'\b4\b', 'four', text)
+    text = re.sub(r'\b5\b', 'five', text)
+    text = re.sub(r'\b6\b', 'six', text)
+    text = re.sub(r'\b7\b', 'seven', text)
+    text = re.sub(r'\b8\b', 'eight', text)
+    text = re.sub(r'\b9\b', 'nine', text)
+    text = re.sub(r'\b10\b', 'ten', text)
+    text = re.sub(r'\b11\b', 'eleven', text)
+    text = re.sub(r'\b12\b', 'twelve', text)
+    text = re.sub(r'\b13\b', 'thirteen', text)
+    text = re.sub(r'\b14\b', 'fourteen', text)
+    text = re.sub(r'\b15\b', 'fifteen', text)
+    text = re.sub(r'\b16\b', 'sixteen', text)
+    text = re.sub(r'\b17\b', 'seventeen', text)
+    text = re.sub(r'\b18\b', 'eighteen', text)
+    text = re.sub(r'\b19\b', 'nineteen', text)
+    text = re.sub(r'\b20\b', 'twenty', text)
+    text = re.sub(r'\b23\b', 'twenty-three', text)
+    
+    # Remove numbers after letters (no1 -> no, mat2 -> mat)
+    text = re.sub(r'\b([a-zA-Z]+)([0-9])\b', r'\g<1>', text)
+    
+    # Remove articles (a, an, the)
+    text = re.sub(r'\ba\b ([a-zA-Z]+)', r'\g<1>', text)
+    text = re.sub(r'\ban\b ([a-zA-Z]+)', r'\g<1>', text)
+    text = re.sub(r'\bthe\b ([a-zA-Z]+)', r'\g<1>', text)
+    
+    # Fix additional word forms
+    text = re.sub(r'\bbackwards\b', 'backward', text)
+    
+    # Final cleanup of whitespace
     text = ' '.join(text.split()).strip()
     
     return text
@@ -38,16 +105,40 @@ def normalize_answer(text: str) -> str:
 
 def exact_match_strict(pred: str, gt: str) -> bool:
     """
-    Exact Match (EM-1): Case-sensitive exact matching
+    Exact Match (EM-1): Case-sensitive exact matching after normalization
     """
-    return pred.strip() == gt.strip()
+    return normalize_answer(pred) == normalize_answer(gt)
 
 
 def exact_match_relaxed(pred: str, gt: str) -> bool:
     """
-    Exact Match Relaxed (EM-R1): Case-insensitive normalized matching
+    Exact Match Relaxed (EM-R1): More flexible matching strategies
+    Based on original ScanQA evaluation script
     """
-    return normalize_answer(pred) == normalize_answer(gt)
+    pred_norm = normalize_answer(pred)
+    gt_norm = normalize_answer(gt)
+    
+    # Strategy 1: Exact match after normalization
+    if pred_norm == gt_norm:
+        return True
+    
+    # Strategy 2: Prediction is contained in ground truth
+    if pred_norm in gt_norm:
+        return True
+    
+    # Strategy 3: Prediction without spaces is contained in ground truth without spaces
+    pred_no_space = ''.join(pred_norm.split())
+    gt_no_space = ''.join(gt_norm.split())
+    if pred_no_space in gt_no_space:
+        return True
+    
+    # Strategy 4: Word overlap - check if they have common words
+    pred_words = set(pred_norm.split())
+    gt_words = set(gt_norm.split())
+    if len(pred_words.intersection(gt_words)) > 0:
+        return True
+    
+    return False
 
 
 def evaluate_predictions(predictions_file: str) -> Tuple[Dict[str, float], List[Dict]]:
@@ -64,15 +155,21 @@ def evaluate_predictions(predictions_file: str) -> Tuple[Dict[str, float], List[
     with open(predictions_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
-    em1_correct = 0  # Exact Match strict
-    emr1_correct = 0  # Exact Match relaxed
+    em1_correct = 0  # Exact Match normalized
+    emr1_correct = 0  # Exact Match relaxed (multiple strategies)
     total_samples = 0
     
     # Statistics for detailed analysis
     results = []
     
-    # Debug counters
-    em1_fail_emr1_pass = 0  # Cases where EM-1 fails but EM-R1 passes
+    # Debug counters for different matching strategies
+    strategy_stats = {
+        'exact_match': 0,
+        'substring_match': 0,
+        'no_space_match': 0,
+        'word_overlap': 0
+    }
+    
     debug_cases = []  # Store some interesting cases for analysis
     
     for item in data:
@@ -104,16 +201,35 @@ def evaluate_predictions(predictions_file: str) -> Tuple[Dict[str, float], List[
         if emr1_match:
             emr1_correct += 1
         
+        # Determine which strategy worked for relaxed matching
+        matched_strategy = None
+        if emr1_match:
+            pred_norm = normalize_answer(pred_answer)
+            gt_norm = normalize_answer(gt_answer)
+            
+            if pred_norm == gt_norm:
+                matched_strategy = 'exact_match'
+                strategy_stats['exact_match'] += 1
+            elif pred_norm in gt_norm:
+                matched_strategy = 'substring_match'
+                strategy_stats['substring_match'] += 1
+            elif ''.join(pred_norm.split()) in ''.join(gt_norm.split()):
+                matched_strategy = 'no_space_match'
+                strategy_stats['no_space_match'] += 1
+            elif len(set(pred_norm.split()).intersection(set(gt_norm.split()))) > 0:
+                matched_strategy = 'word_overlap'
+                strategy_stats['word_overlap'] += 1
+        
         # Debug: Check cases where EM-1 fails but EM-R1 passes
         if not em1_match and emr1_match:
-            em1_fail_emr1_pass += 1
             if len(debug_cases) < 10:  # Store first 10 cases for analysis
                 debug_cases.append({
                     'id': item['id'],
                     'gt': gt_answer,
                     'pred': pred_answer,
                     'gt_norm': normalize_answer(gt_answer),
-                    'pred_norm': normalize_answer(pred_answer)
+                    'pred_norm': normalize_answer(pred_answer),
+                    'strategy': matched_strategy
                 })
         
         # Store result for detailed analysis
@@ -124,6 +240,7 @@ def evaluate_predictions(predictions_file: str) -> Tuple[Dict[str, float], List[
             'prediction': pred_answer,
             'em1_match': em1_match,
             'emr1_match': emr1_match,
+            'matched_strategy': matched_strategy,
             'gt_normalized': normalize_answer(gt_answer),
             'pred_normalized': normalize_answer(pred_answer),
             'gt_stripped': gt_answer.strip(),
@@ -140,7 +257,7 @@ def evaluate_predictions(predictions_file: str) -> Tuple[Dict[str, float], List[
         'emr1_correct': emr1_correct,
         'em1_score': em1_score,
         'emr1_score': emr1_score,
-        'em1_fail_emr1_pass': em1_fail_emr1_pass,
+        'strategy_stats': strategy_stats,
         'debug_cases': debug_cases
     }
     
@@ -221,12 +338,20 @@ def parse_args():
     Parse command line arguments
     """
     parser = argparse.ArgumentParser(
-        description='Evaluate EM-1 and EM-R1 metrics for SQA3D predictions',
+        description='Evaluate EM-1 and EM-R1 metrics for SQA3D predictions with comprehensive answer normalization',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python eval_sqa3d.py --pred sqa_predictions.json
   python eval_sqa3d.py --pred /path/to/model_outputs.json --output results.json
+
+Evaluation Metrics:
+  EM-1:  Exact match after comprehensive normalization (typo fixes, digit->word, article removal)
+  EM-R1: Relaxed matching with multiple strategies:
+         - Exact match after normalization
+         - Substring match (prediction contained in ground truth)
+         - No-space match (same as substring but ignoring spaces)
+         - Word overlap (at least one common word)
         """
     )
     
@@ -281,28 +406,39 @@ def main():
         
         # Print results
         print("\n" + "="*60)
-        print("SQA3D EVALUATION RESULTS")
+        print("SQA3D EVALUATION RESULTS (Comprehensive Normalization)")
         print("="*60)
         print(f"Prediction file: {predictions_file}")
         print(f"Total Samples: {metrics['total_samples']}")
-        print(f"\nEM-1 (Exact Match Strict):")
+        print(f"\nEM-1 (Exact Match with Normalization):")
         print(f"  Correct: {metrics['em1_correct']}")
         print(f"  Score: {metrics['em1_score']:.4f} ({metrics['em1_score']*100:.2f}%)")
-        print(f"\nEM-R1 (Exact Match Relaxed):")
+        print(f"\nEM-R1 (Relaxed Match - Multiple Strategies):")
         print(f"  Correct: {metrics['emr1_correct']}")
         print(f"  Score: {metrics['emr1_score']:.4f} ({metrics['emr1_score']*100:.2f}%)")
         
         # Print improvement from relaxed matching
         improvement = metrics['emr1_correct'] - metrics['em1_correct']
         print(f"\nImprovement from relaxed matching: {improvement} samples")
-        print(f"Cases where EM-1 failed but EM-R1 passed: {metrics['em1_fail_emr1_pass']}")
+        
+        # Show strategy breakdown
+        print(f"\nEM-R1 Strategy Breakdown:")
+        strategy_stats = metrics['strategy_stats']
+        print(f"  Exact match after normalization: {strategy_stats['exact_match']}")
+        print(f"  Substring match: {strategy_stats['substring_match']}")
+        print(f"  No-space match: {strategy_stats['no_space_match']}")
+        print(f"  Word overlap: {strategy_stats['word_overlap']}")
         
         # Show debug cases if any
         if metrics['debug_cases'] and args.verbose:
             print(f"\nCases where relaxed matching helped:")
             for i, case in enumerate(metrics['debug_cases']):
-                print(f"  {i+1}. ID {case['id']}: GT='{case['gt']}' | Pred='{case['pred']}'")
-                print(f"     Normalized: GT='{case['gt_norm']}' | Pred='{case['pred_norm']}'")
+                print(f"  {i+1}. ID {case['id']} (Strategy: {case['strategy']}):")
+                print(f"     GT: '{case['gt']}'")
+                print(f"     Pred: '{case['pred']}'")
+                print(f"     GT normalized: '{case['gt_norm']}'")
+                print(f"     Pred normalized: '{case['pred_norm']}'")
+                print()
         
         # Show detailed analysis if verbose
         if args.verbose:

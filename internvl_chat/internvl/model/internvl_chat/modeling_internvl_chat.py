@@ -57,7 +57,7 @@ class InternVLChatModel(PreTrainedModel):
         self.patch_size = patch_size
         self.select_layer = config.select_layer
         self.template = config.template
-        self.num_image_token = int((image_size // patch_size) ** 2 * (config.downsample_ratio ** 2))
+        self.num_image_token = int((image_size // patch_size) ** 2 * (config.downsample_ratio ** 2)) // 4
         self.downsample_ratio = config.downsample_ratio
         self.ps_version = config.ps_version
         self.llm_arch_name = config.llm_config.architectures[0]

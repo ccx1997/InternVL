@@ -12,7 +12,7 @@ python demo_internvl_dual.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Commented out to avoid conflicts with other scripts
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
 from typing import List, Union
@@ -419,7 +419,8 @@ def patch_model_chat_method(model):
         prompt = tmpl.get_prompt()
 
         # —— 插入 <image> token 总数 —— #
-        n_img2 = 13 * 13 + 1    # 训练时写死 170
+        n_img2 =7 * 7 + 1    # 训练时写死 170
+        # self.num_image_token = int(self.num_image_token/4)
         for n_patch, n_patch2 in zip(num_patches_list, num_patches_list_2):
             # Fix: For video frames, each frame has both encoder tokens
             # Training uses: [self.num_image_token + self.num_img2_tokens] * num_patches
@@ -508,13 +509,13 @@ def simple_chat(model, tokenizer,
 
 def main():
     parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-3600',
+    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-1200',
                         help='Path to dual‑encoder checkpoint')
     parser.add_argument('--input', required=True,
                         help='Image / video path')
     parser.add_argument('--question', default='Describe what you see in detail.',
                         help='Prompt for the model')
-    parser.add_argument('--num-frames', type=int, default=12,
+    parser.add_argument('--num-frames', type=int, default=32,
                         help='Num video frames (sampling)')
     parser.add_argument('--max-patches', type=int, default=6,
                         help='Dynamic patches per image')

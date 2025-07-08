@@ -31,7 +31,7 @@ from simple_inference_demo import (
 )
 
 # Set CUDA device after imports to override any settings from imported modules
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 
 class GPUMonitor:
@@ -260,7 +260,7 @@ def process_single_sample(model, tokenizer, sample: Dict[str, Any],
 def main():
     parser = argparse.ArgumentParser(description='Batch inference for ScanQA dataset')
     parser.add_argument('--checkpoint', 
-                        default='/mnt/models/InternVL3-8B',
+                        default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-8800',
                         help='Path to dual-encoder checkpoint')
     parser.add_argument('--dataset', 
                         default='/mnt/chensenda/codes/VLN/ScanQA/ScanQA_v1.0_val_reformat_std_video.json',
@@ -269,9 +269,9 @@ def main():
                         default='',  # Not needed since paths are absolute in the dataset
                         help='Root directory for video files (not used as paths are absolute)')
     parser.add_argument('--output', 
-                        default='scanqa_predictions_internvl3_8b.json',
+                        default='scanqa_predictions_avgpool_stage2_3_8800.json',
                         help='Output file for predictions')
-    parser.add_argument('--num-frames', type=int, default=12,
+    parser.add_argument('--num-frames', type=int, default=32,
                         help='Number of frames to sample from each video file')
     parser.add_argument('--max-patches', type=int, default=1,
                         help='Dynamic patches per video frame')

@@ -424,7 +424,7 @@ def patch_model_chat_method(model):
         prompt = tmpl.get_prompt()
 
         # —— 插入 <image> token 总数 —— #
-        n_img2 = 13 * 13 + 1    # 训练时写死 170
+        n_img2 = 7 * 7 + 1    # 训练时写死 170
         for n_patch, n_patch2 in zip(num_patches_list, num_patches_list_2):
             # Fix: For video frames, each frame has both encoder tokens
             # Training uses: [self.num_image_token + self.num_img2_tokens] * num_patches
@@ -636,7 +636,7 @@ def create_gradio_interface():
 
 def main():
     parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400',
+    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-1200',
                         help='Path to dual‑encoder checkpoint')
     parser.add_argument('--input', 
                         help='Image / video path (for CLI mode)')
@@ -657,7 +657,7 @@ def main():
     parser.add_argument('--no-share', dest='share', action='store_false',
                         help='Disable shareable Gradio link')
     parser.set_defaults(share=True)
-    parser.add_argument('--port', type=int, default=17861,
+    parser.add_argument('--port', type=int, default=17969,
                         help='Port for Gradio interface')
     
     args = parser.parse_args()

@@ -43,8 +43,8 @@ NUMERIC_QTYPES = {
 # 2.  MAIN
 # -------------------------------------------------------------------
 def main(pred, out):
-    vsi = load_dataset("VSI-Bench")["test"]    # :contentReference[oaicite:1]{index=1}
-    gold = {int(row["id"]): row for row in vsi if row["question_type"] == "object_counting"}
+    vsi = load_dataset("/mnt/chengchangxu/data/VSI-Bench")["test"]    # :contentReference[oaicite:1]{index=1}
+    gold = {int(row["id"]): row for row in vsi if ("object_rel_direction" in row["question_type"])}
     preds = {int(d["idx"]): d["prediction"] for d in json.load(open(pred))}
 
     # Completeness check -----------------------------------------------------
@@ -58,10 +58,11 @@ def main(pred, out):
     # Accumulate scores by task -----------------------------------------------
     stat = defaultdict(lambda: {"numer": 0.0, "denom": 0})
     for idx, row in gold.items():
-        if idx>10:
-            break
+        # if idx>10:
+        #     break
+        print(row)
         qtype, gt, pred = row["question_type"], row["ground_truth"], preds[idx]
-
+        pred = pred[0]
         if qtype in NUMERIC_QTYPES:
             score = mra(pred, gt)
         else:                                              # MCA

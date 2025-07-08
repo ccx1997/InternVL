@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-Evaluation script for SQA3D dataset
+Evaluation script for ScanQA dataset with comprehensive answer normalization
 Computes CiDEr, BLEU-1, BLEU-4, METEOR, and ROUGE-L metrics
 comparing ground truth answers (from: gpt) with predictions (from: internVL)
+
+Enhanced with comprehensive answer preprocessing including:
+- Common typo corrections (letf->left, tehre->there, etc.)
+- Digit to word conversion (1->one, 2->two, etc.)
+- Article removal (a, an, the)
+- Punctuation and whitespace normalization
 """
 
 import json
@@ -10,6 +16,7 @@ import argparse
 import sys
 from typing import List, Dict, Tuple
 import numpy as np
+import re
 
 # Import required libraries for metrics
 try:
@@ -43,15 +50,101 @@ else:
 
 
 class SQA3DEvaluator:
-    """Evaluator for SQA3D dataset"""
+    """
+    Enhanced evaluator for ScanQA dataset with comprehensive answer normalization.
+    
+    Computes standard text generation metrics (BLEU, METEOR, ROUGE-L, CiDEr) with
+    improved preprocessing that handles common issues in VQA datasets including:
+    - Typo corrections and spelling normalizations
+    - Digit-to-word conversions for consistent evaluation
+    - Article removal to focus on content words
+    - Punctuation and whitespace standardization
+    """
     
     def __init__(self):
         self.smoothing_function = SmoothingFunction().method1
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         
     def preprocess_text(self, text: str) -> str:
-        """Preprocess text by converting to lowercase and stripping whitespace"""
-        return text.lower().strip()
+        """
+        Comprehensive text preprocessing with normalization based on ScanQA evaluation standards.
+        Handles typos, digit-to-word conversion, article removal, and other cleanups.
+        """
+        # Convert to lowercase
+        text = text.lower()
+        
+        # Remove trailing and leading whitespace
+        text = re.sub('[ ]+$', '', text)
+        text = re.sub('^[ ]+', '', text)
+        
+        # Remove multiple spaces
+        text = re.sub(' {2,}', ' ', text)
+        
+        # Fix spacing after periods
+        text = re.sub('\.[ ]{2,}', '. ', text)
+        
+        # Remove unwanted characters (keep letters, numbers, comma, apostrophe, space, dash, colon)
+        text = re.sub('[^a-zA-Z0-9,\'\s\-:]+', '', text)
+        
+        # Fix character replacements
+        text = re.sub('ç', 'c', text)
+        text = re.sub('\'', '\'', text)
+        
+        # Fix common typos
+        text = re.sub(r'\bletf\b', 'left', text)
+        text = re.sub(r'\blet\b', 'left', text)
+        text = re.sub(r'\btehre\b', 'there', text)
+        text = re.sub(r'\brigth\b', 'right', text)
+        text = re.sub(r'\brght\b', 'right', text)
+        text = re.sub(r'\bbehine\b', 'behind', text)
+        text = re.sub(r'\btv\b', 'tv', text)  # Keep lowercase for generation metrics
+        text = re.sub(r'\bchai\b', 'chair', text)
+        text = re.sub(r'\bwasing\b', 'washing', text)
+        text = re.sub(r'\bwaslked\b', 'walked', text)
+        text = re.sub(r'\boclock\b', 'o\'clock', text)
+        text = re.sub(r'\bo\'[ ]+clock\b', 'o\'clock', text)
+        
+        # Convert digits to words
+        text = re.sub(r'\b0\b', 'zero', text)
+        text = re.sub(r'\bnone\b', 'zero', text)
+        text = re.sub(r'\b1\b', 'one', text)
+        text = re.sub(r'\b2\b', 'two', text)
+        text = re.sub(r'\b3\b', 'three', text)
+        text = re.sub(r'\b4\b', 'four', text)
+        text = re.sub(r'\b5\b', 'five', text)
+        text = re.sub(r'\b6\b', 'six', text)
+        text = re.sub(r'\b7\b', 'seven', text)
+        text = re.sub(r'\b8\b', 'eight', text)
+        text = re.sub(r'\b9\b', 'nine', text)
+        text = re.sub(r'\b10\b', 'ten', text)
+        text = re.sub(r'\b11\b', 'eleven', text)
+        text = re.sub(r'\b12\b', 'twelve', text)
+        text = re.sub(r'\b13\b', 'thirteen', text)
+        text = re.sub(r'\b14\b', 'fourteen', text)
+        text = re.sub(r'\b15\b', 'fifteen', text)
+        text = re.sub(r'\b16\b', 'sixteen', text)
+        text = re.sub(r'\b17\b', 'seventeen', text)
+        text = re.sub(r'\b18\b', 'eighteen', text)
+        text = re.sub(r'\b19\b', 'nineteen', text)
+        text = re.sub(r'\b20\b', 'twenty', text)
+        text = re.sub(r'\b23\b', 'twenty-three', text)
+        
+        # Remove numbers after letters (no1 -> no, mat2 -> mat)
+        text = re.sub(r'\b([a-zA-Z]+)([0-9])\b', r'\g<1>', text)
+        
+        # Remove articles (a, an, the) - but be more careful with generation metrics
+        # Only remove articles before nouns (when followed by another word)
+        text = re.sub(r'\ba\b ([a-zA-Z]+)', r'\g<1>', text)
+        text = re.sub(r'\ban\b ([a-zA-Z]+)', r'\g<1>', text)
+        text = re.sub(r'\bthe\b ([a-zA-Z]+)', r'\g<1>', text)
+        
+        # Fix additional word forms
+        text = re.sub(r'\bbackwards\b', 'backward', text)
+        
+        # Final cleanup of whitespace
+        text = ' '.join(text.split()).strip()
+        
+        return text
     
     def tokenize_text(self, text: str) -> List[str]:
         """Tokenize text using NLTK"""
@@ -210,10 +303,26 @@ class SQA3DEvaluator:
         
         print(f"Found {len(references)} question-answer pairs")
         
+        # Show some examples of preprocessing
+        if len(hypotheses) > 0:
+            print("\nPreprocessing examples:")
+            for i in range(min(3, len(hypotheses))):
+                orig_hyp = hypotheses[i]
+                orig_ref = references[i][0] if references[i] else ""
+                proc_hyp = self.preprocess_text(orig_hyp)
+                proc_ref = self.preprocess_text(orig_ref)
+                
+                if orig_hyp != proc_hyp or orig_ref != proc_ref:
+                    print(f"  Example {i+1}:")
+                    if orig_ref != proc_ref:
+                        print(f"    GT: '{orig_ref}' -> '{proc_ref}'")
+                    if orig_hyp != proc_hyp:
+                        print(f"    Pred: '{orig_hyp}' -> '{proc_hyp}'")
+        
         # Compute all metrics
         results = {}
         
-        print("Computing BLEU scores...")
+        print("\nComputing BLEU scores...")
         bleu_scores = self.compute_bleu_scores(references, hypotheses)
         results.update(bleu_scores)
         
@@ -236,7 +345,19 @@ class SQA3DEvaluator:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate SQA3D predictions')
+    parser = argparse.ArgumentParser(
+        description='Evaluate ScanQA predictions with enhanced answer normalization (BLEU, METEOR, ROUGE-L, CiDEr)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Enhanced preprocessing includes:
+- Common typo corrections and digit-to-word conversion
+- Article removal and punctuation normalization
+- Consistent whitespace handling
+
+This provides more robust evaluation by normalizing both ground truth and predictions
+before computing generation metrics.
+        """
+    )
     parser.add_argument('--pred', '-p', type=str, required=True,
                        help='Path to predictions JSON file')
     parser.add_argument('--output', '-o', type=str, default=None,
@@ -249,7 +370,7 @@ def main():
     
     # Print results
     print("\n" + "="*50)
-    print("SQA3D EVALUATION RESULTS")
+    print("ScanQA EVALUATION RESULTS (Enhanced Normalization)")
     print("="*50)
     for metric, score in results.items():
         print(f"{metric:12}: {score:.2f}")

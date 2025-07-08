@@ -7,7 +7,7 @@ sys.path.append('/mnt/chensenda/codes/VLN/InternVL/internvl_chat')
 import argparse
 import json
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '5'
+os.environ['CUDA_VISIBLE_DEVICES'] = '6'
 import sys
 import time
 import torch
@@ -222,7 +222,7 @@ def process_single_sample(model, tokenizer, sample: Dict[str, Any],
 def main():
     parser = argparse.ArgumentParser(description='Batch inference for VSI-Bench dataset')
     parser.add_argument('--checkpoint', 
-                        default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-3600',
+                        default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-8800',
                         help='Path to dual-encoder checkpoint')
     parser.add_argument('--dataset', 
                         default='/mnt/chengchangxu/data/VSI-Bench/vsi_bench_test.jsonl',
@@ -231,9 +231,9 @@ def main():
                         default='/mnt/chengchangxu/data/VSI-Bench/',
                         help='Root directory for video/image files')
     parser.add_argument('--output', 
-                        default='vsi_bench_predictions.json',
+                        default='vsi_bench_predictions_avgpool_stage2_3-object_rel_direction.json',
                         help='Output file for predictions')
-    parser.add_argument('--num-frames', type=int, default=16,
+    parser.add_argument('--num-frames', type=int, default=32,
                         help='Number of video frames to sample')
     parser.add_argument('--max-patches', type=int, default=4,
                         help='Dynamic patches per image')
@@ -274,10 +274,10 @@ def main():
     total_start_time = time.time()
     
     for sample in tqdm(dataset_subset, desc="Processing samples"):
-        if sample['type'] !="object_counting":
+        if "object_rel_direction" not in sample['type'] and "object_counting" not in sample['type'] and "object_size_estimation" not in sample['type']:
             continue
         count += 1
-        # if count > 50:
+        # if count > 10:
         #     break
         
         # Record start time for this iteration
@@ -296,7 +296,7 @@ def main():
             elapsed_time = time.time() - total_start_time
             samples_per_sec = len(results) / elapsed_time
             print(f"Processed {len(results)} samples. Latest: idx={result['idx']}, prediction='{result['prediction'][:50]}...', Speed: {samples_per_sec:.2f} samples/sec")
-    
+    print(f"Processed {count} samples")
     # Print GPU performance statistics
     if gpu_monitor:
         gpu_monitor.print_statistics()
