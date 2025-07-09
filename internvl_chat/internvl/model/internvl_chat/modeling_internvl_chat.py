@@ -141,10 +141,7 @@ class VisionCompressor(nn.Module):
             
         Returns:
             compressed_embeddings: [padded_groups, seq_len, hidden_size]
-        """
-        if embeddings is None or embeddings.size(0) == 0: # todo
-            return embeddings
-            
+        """ 
         B, seq_len, hidden_size = embeddings.shape
         
         actual_groups = (B + self.compression_ratio - 1) // self.compression_ratio
@@ -284,6 +281,33 @@ class InternVLChatModel(PreTrainedModel):
 
         self._initialize_vision_projector()
 
+    def _compress_image_flags(self, image_flags):
+        """
+        Compress image flags according to compression ratio.
+        If image_flags is tensor([0]), return tensor([0]).
+        If image_flags length > 1, compress by grouping and taking max of each group.
+        """
+        if image_flags.shape[0] == 1:
+            # If single flag, return as is
+            return image_flags
+        
+        # Pad the tensor to make it divisible by compression_ratio
+        total_length = image_flags.shape[0]
+        padded_length = ((total_length + self.compression_ratio - 1) // self.compression_ratio) * self.compression_ratio
+        
+        if padded_length > total_length:
+            # Pad with the last value
+            padding = image_flags[-1:].expand(padded_length - total_length)
+            padded_flags = torch.cat([image_flags, padding], dim=0)
+        else:
+            padded_flags = image_flags
+        
+        # Reshape to groups and take max of each group
+        grouped_flags = padded_flags.view(-1, self.compression_ratio)
+        compressed_flags = torch.max(grouped_flags, dim=1)[0]
+        
+        return compressed_flags
+
     def _initialize_vision_projector(self):
         def _initialize_weights(m):
             # if isinstance(m, nn.Linear):
@@ -364,6 +388,8 @@ class InternVLChatModel(PreTrainedModel):
         loss_weight: Optional[List] = None,
         loss_reduction_all_gather: Optional[bool] = False,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+
+        print("-----------------begin forward-----------------")
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # image_flags = image_flags.squeeze(-1)
@@ -371,7 +397,16 @@ class InternVLChatModel(PreTrainedModel):
         input_embeds = self.language_model.get_input_embeddings()(input_ids).clone()
         B, N, C = input_embeds.shape
         vit_embeds = self.extract_feature(pixel_values)
-        vit_embeds = vit_embeds[image_flags == 1]
+        print("")
+        print(f"pixel_values.shape: {pixel_values.shape}")
+        print(f"pixel_values2.shape: {pixel_values2.shape}")
+        print(f"vit_embeds.shape: {vit_embeds.shape}")
+        if not self.use_vision_compression:
+            vit_embeds = vit_embeds[image_flags == 1]
+        print(f"vit_embeds_after.shape: {vit_embeds.shape}")
+        print(f"image_flags: {image_flags}")
+        print(f"image_flags2: {image_flags2}")
+        print(f"num_tiles:{num_tiles}")
         # video muti frames
         # pixel_values.shape: torch.Size([14, 3, 448, 448]
         # pixel_values2.shape: torch.Size([1, 14, 3, 518, 518])
@@ -387,14 +422,26 @@ class InternVLChatModel(PreTrainedModel):
         # for encoder2
         if pixel_values2 is not None:
             img_embeds2 = self.extract_feature2(pixel_values2, attention_mask2)
-            img_embeds2 = img_embeds2[image_flags2 == 1]
+            print(f"img_embeds2.shape: {img_embeds2.shape}")
+            
+            print(f"img_embeds2_after.shape: {img_embeds2.shape}")
             
             if self.use_vision_compression:
                 vit_embeds_compressed = self.vision_compressor_v1(vit_embeds)
                 img_embeds2_compressed = self.vision_compressor_v2(img_embeds2)
-                
+                print(f"vit_embeds_compressed.shape: {vit_embeds_compressed.shape}")
+                print(f"img_embeds2_compressed.shape: {img_embeds2_compressed.shape}")
                 vit_embeds = vit_embeds_compressed
                 img_embeds2 = img_embeds2_compressed
+
+                # Compress image flags to match compressed embeddings
+                image_flags = self._compress_image_flags(image_flags)
+                image_flags2 = self._compress_image_flags(image_flags2)
+                print(f"compressed image_flags: {image_flags}")
+                print(f"compressed image_flags2: {image_flags2}")
+                
+                vit_embeds = vit_embeds[image_flags == 1]
+                img_embeds2 = img_embeds2[image_flags2 == 1]
                 
                 # Update num_tiles to reflect compressed structure
                 if num_tiles is not None and isinstance(num_tiles, list):
@@ -417,8 +464,11 @@ class InternVLChatModel(PreTrainedModel):
             # concat the 2 embeddings
             # print(f"num_tiles: {num_tiles}")
             if num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles):
+                print("num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles)")
                 vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
+                print(f"vit_embeds.shape: {vit_embeds.shape}")
                 vit_embeds = vit_embeds.reshape(-1, C)
+                print(f"vit_embeds_after.shape: {vit_embeds.shape}")
             else:
                 vision_embeddings = []
                 idx_v1, idx_v2 = 0, 0
@@ -517,7 +567,7 @@ class InternVLChatModel(PreTrainedModel):
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
-
+        print("-----------------end forward-----------------")
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
