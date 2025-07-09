@@ -368,16 +368,26 @@ class LazySupervisedDataset(Dataset):
         distributed_mode=False,
         force_shuffle=False,
         random_seed=0,
+        # compression parameters
+        use_vision_compression=False,
+        compression_ratio=4,
     ):
         super(LazySupervisedDataset, self).__init__()
         self.ds_name = ds_name
         self.tokenizer = tokenizer
         self.template_name = template_name
         self.num_image_token = num_image_token
+        
+        # Store compression parameters
+        self.use_vision_compression = use_vision_compression
+        self.compression_ratio = compression_ratio
+        
         logger.info(f'[Dataset] num_image_token: {num_image_token}')
         logger.info(f'[Dataset] dynamic_image_size: {dynamic_image_size}')
         logger.info(f'[Dataset] use_thumbnail: {use_thumbnail}')
         logger.info(f'[Dataset] min_dynamic_patch: {min_dynamic_patch}, max_dynamic_patch: {max_dynamic_patch}')
+        logger.info(f'[Dataset] use_vision_compression: {use_vision_compression}')
+        logger.info(f'[Dataset] compression_ratio: {compression_ratio}')
 
         self.image_size = image_size
         self.is_train = is_train
@@ -525,6 +535,43 @@ class LazySupervisedDataset(Dataset):
                         token_length = self.conv2length[str_length]
                 self.length.append(token_length)
 
+    def get_compressed_token_count_per_tile_simplified(self, num_tiles, is_video=False):
+        """
+        Calculate token count for each tile considering compression
+        
+        Args:
+            num_tiles: List of tile counts per image
+            is_video: Whether this is video data
+            
+        Returns:
+            List of token counts per tile
+        """
+        if self.use_vision_compression:
+            # With compression, calculate for each tile group
+            token_counts = []
+            for num_tile in num_tiles:
+                if is_video and num_tile > 1:
+                    # For video: compress every compression_ratio frames into 1
+                    compressed_groups = (num_tile + self.compression_ratio - 1) // self.compression_ratio
+                    # Each group has both encoder outputs
+                    tokens_per_group = self.num_image_token + self.num_img2_tokens
+                    token_counts.append(tokens_per_group * compressed_groups)
+                else:
+                    # For image: compress every compression_ratio tiles into 1 group
+                    if num_tile > 1:
+                        # Multiple tiles per image, apply compression
+                        compressed_groups = (num_tile + self.compression_ratio - 1) // self.compression_ratio
+                        tokens_per_group = self.num_image_token + self.num_img2_tokens
+                        token_counts.append(tokens_per_group * compressed_groups)
+                    else:
+                        # Single tile per image, one group with both encoders
+                        tokens_per_group = self.num_image_token + self.num_img2_tokens
+                        token_counts.append(tokens_per_group)
+            return token_counts
+        else:
+            # Original calculation without compression
+            return [self.num_image_token * num_tile + self.num_img2_tokens for num_tile in num_tiles]
+
     def __len__(self):
         return len(self.raw_data)
 
@@ -583,6 +630,7 @@ class LazySupervisedDataset(Dataset):
             image_paths = [image_paths]
 
         num_images = len(image_paths)
+
         conversation_text = ''.join(conv['value'] for conv in data_item['conversations'])
         num_image_placeholders = conversation_text.count('<image>')
 
@@ -596,7 +644,16 @@ class LazySupervisedDataset(Dataset):
 
         images, num_tiles = [], []
         images2 = [] # for the new image encoder in the dual-vit system
+        #将image_paths中每个元素按元素扩充4倍，比如image_paths = ['a.jpg', 'b.jpg', 'c.jpg']，扩充后为['a.jpg', 'a.jpg', 'a.jpg', 'a.jpg', 'b.jpg', 'b.jpg', 'b.jpg', 'b.jpg', 'c.jpg', 'c.jpg', 'c.jpg', 'c.jpg']
+        if self.use_vision_compression:
+            # Expand each image path by compression_ratio times for compression
+            expanded_image_paths = []
+            for image_path in image_paths:
+                expanded_image_paths.extend([image_path] * self.compression_ratio)
+            # Store original paths for images2 processing
+            image_paths = expanded_image_paths
 
+        
         for image_path in image_paths:
             # Merge the image path
             image_path = self.get_image_path(image_path)
@@ -626,16 +683,28 @@ class LazySupervisedDataset(Dataset):
         preprocess_function = self.get_preprocess_function()
 
         # Preprocess the conversations and generate the return dictionary
-        num_image_tokens = [self.num_image_token * num_tile + self.num_img2_tokens for num_tile in num_tiles]
+        if self.use_vision_compression:
+            # Use compression-aware token calculation for multi-image
+            total_tiles = sum(num_tiles)  # Total number of tiles across all images
+            compressed_groups = (total_tiles + self.compression_ratio - 1) // self.compression_ratio
+            tokens_per_group = self.num_image_token + self.num_img2_tokens
+            num_image_tokens = [tokens_per_group] * compressed_groups
+            # Update num_image to match compressed groups for preprocessing function
+            num_image_for_preprocess = compressed_groups
+        else:
+            # Original calculation without compression
+            num_image_tokens = [self.num_image_token * num_tile + self.num_img2_tokens for num_tile in num_tiles]
+            num_image_for_preprocess = num_images
+            
         ret = preprocess_function(self.template_name, [deepcopy(data_item['conversations'])],
                                   self.tokenizer, num_image_tokens, group_by_length=self.group_by_length,
-                                  use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_images)
+                                  use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_image_for_preprocess)
 
         # Calculate position_ids for packed dataset
         position_ids = ret['attention_mask'].long().cumsum(-1) - 1
         position_ids.masked_fill_(ret['attention_mask'] == 0, 1)
         image_end_token_id = self.tokenizer.convert_tokens_to_ids(IMG_END_TOKEN)
-        assert (ret['input_ids'][0] == image_end_token_id).sum() == num_images, f'image tokens are truncated, this dataset is {self.ds_name}'
+        assert (ret['input_ids'][0] == image_end_token_id).sum() == num_image_for_preprocess, f'image tokens are truncated, this dataset is {self.ds_name}'
 
         # Create the final return dictionary
         ret = dict(
@@ -792,7 +861,7 @@ class LazySupervisedDataset(Dataset):
             image_list = self.load_video(video_path) # No dynamic spliting
 
         # Generate special tokens for each video frame
-        special_tokens = '\n'.join(['Frame-{}: <image>'.format(i + 1) for i in range(len(image_list))])
+        special_tokens = '\n'.join(['Clip-{}: <image>'.format(i + 1) for i in range((len(image_list)+3)//4)])
         data_item['conversations'][0]['value'] = data_item['conversations'][0]['value'].replace(
             '<video>\n', special_tokens + '\n')
 
@@ -807,10 +876,21 @@ class LazySupervisedDataset(Dataset):
         preprocess_function = self.get_preprocess_function()
 
         # Preprocess the conversations and generate the return dictionary
-        num_image_tokens = [self.num_image_token + self.num_img2_tokens] * num_patches
+        if self.use_vision_compression:
+            # Use compression-aware token calculation for video
+            compressed_groups = (num_patches + self.compression_ratio - 1) // self.compression_ratio
+            tokens_per_group = self.num_image_token + self.num_img2_tokens
+            num_image_tokens = [tokens_per_group] * compressed_groups
+            # Update num_image to match compressed groups for preprocessing function
+            num_image_for_preprocess = compressed_groups
+        else:
+            # Original calculation without compression
+            num_image_tokens = [self.num_image_token + self.num_img2_tokens] * num_patches
+            num_image_for_preprocess = num_patches
+            
         ret = preprocess_function(self.template_name, [deepcopy(data_item['conversations'])],
                                   self.tokenizer, num_image_tokens, group_by_length=self.group_by_length,
-                                  use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_patches)
+                                  use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_image_for_preprocess)
 
         # Calculate position_ids for packed dataset
         position_ids = ret['attention_mask'].long().cumsum(-1) - 1
@@ -1045,6 +1125,9 @@ def build_datasets(
             distributed_mode=data_args.use_packed_ds,
             force_shuffle=data_args.use_packed_ds,
             random_seed=ds_idx,
+            # compression parameters from model
+            use_vision_compression=True,
+            compression_ratio=4,
         )
         logger.info(f'Add dataset: {ds_name} with length: {len(dataset)}')
         datasets.append(dataset)

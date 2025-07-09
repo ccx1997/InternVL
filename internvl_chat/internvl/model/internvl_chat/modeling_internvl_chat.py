@@ -48,14 +48,16 @@ class QFormerBlock(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
+        assert self.head_dim * num_heads == hidden_size, "hidden_size must be divisible by num_heads"
         
-        # Cross attention layer
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True
-        ) # todo
+        # Query, Key, Value projections for cross attention
+        self.query_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.key_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.value_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        
+        self.dropout = dropout
         
         # Layer normalization
         self.ln1 = nn.LayerNorm(hidden_size)
@@ -76,12 +78,32 @@ class QFormerBlock(nn.Module):
             query: [B, query_len, hidden_size]
             key_value: [B, kv_len, hidden_size]
         """
-        # Cross attention - properly handle both return values for DeepSpeed ZeRO-3 compatibility
-        attn_output, attn_weights = self.cross_attention(
-            query=query,
-            key=key_value,
-            value=key_value
-        )
+        # Cross attention
+        B, query_len, _ = query.shape
+        B, kv_len, _ = key_value.shape
+        
+        # Project to Q, K, V
+        q = self.query_proj(query)  # [B, query_len, hidden_size]
+        k = self.key_proj(key_value)  # [B, kv_len, hidden_size]
+        v = self.value_proj(key_value)  # [B, kv_len, hidden_size]
+        
+        # Reshape for multi-head attention
+        q = q.view(B, query_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, num_heads, query_len, head_dim]
+        k = k.view(B, kv_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, num_heads, kv_len, head_dim]
+        v = v.view(B, kv_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, num_heads, kv_len, head_dim]
+        
+        # Scaled dot-product attention
+        attn_output = F.scaled_dot_product_attention(
+            q, k, v,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=False
+        )  # [B, num_heads, query_len, head_dim]
+        
+        # Reshape back
+        attn_output = attn_output.transpose(1, 2).contiguous().view(B, query_len, self.hidden_size)  # [B, query_len, hidden_size]
+        
+        # Output projection
+        attn_output = self.out_proj(attn_output)
         
         # Add & Norm
         query = self.ln1(query + attn_output)
@@ -92,13 +114,7 @@ class QFormerBlock(nn.Module):
         # Add & Norm  
         output = self.ln2(query + ffn_output)
         
-        # Ensure attn_weights affects computation graph: add negligible contribution
-        # Sum across attention dimensions and add tiny scaled contribution to output
-        attn_contribution = attn_weights.sum(dim=-1, keepdim=True).sum(dim=-2, keepdim=True) * 1e-10
-        # Expand to match output shape: [B, 1, 1] -> [B, query_len, hidden_size]
-        attn_contribution = attn_contribution.expand_as(output)
-        
-        return output + attn_contribution
+        return output
 
 
 class VisionCompressor(nn.Module):
@@ -389,7 +405,7 @@ class InternVLChatModel(PreTrainedModel):
         loss_reduction_all_gather: Optional[bool] = False,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
-        print("-----------------begin forward-----------------")
+        # print("-----------------begin forward-----------------")
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # image_flags = image_flags.squeeze(-1)
@@ -397,16 +413,16 @@ class InternVLChatModel(PreTrainedModel):
         input_embeds = self.language_model.get_input_embeddings()(input_ids).clone()
         B, N, C = input_embeds.shape
         vit_embeds = self.extract_feature(pixel_values)
-        print("")
-        print(f"pixel_values.shape: {pixel_values.shape}")
-        print(f"pixel_values2.shape: {pixel_values2.shape}")
-        print(f"vit_embeds.shape: {vit_embeds.shape}")
+        # print("")
+        # print(f"pixel_values.shape: {pixel_values.shape}")
+        # print(f"pixel_values2.shape: {pixel_values2.shape}")
+        # print(f"vit_embeds.shape: {vit_embeds.shape}")
         if not self.use_vision_compression:
             vit_embeds = vit_embeds[image_flags == 1]
-        print(f"vit_embeds_after.shape: {vit_embeds.shape}")
-        print(f"image_flags: {image_flags}")
-        print(f"image_flags2: {image_flags2}")
-        print(f"num_tiles:{num_tiles}")
+        # print(f"vit_embeds_after.shape: {vit_embeds.shape}")
+        # print(f"image_flags: {image_flags}")
+        # print(f"image_flags2: {image_flags2}")
+        # print(f"num_tiles:{num_tiles}")
         # video muti frames
         # pixel_values.shape: torch.Size([14, 3, 448, 448]
         # pixel_values2.shape: torch.Size([1, 14, 3, 518, 518])
@@ -422,23 +438,23 @@ class InternVLChatModel(PreTrainedModel):
         # for encoder2
         if pixel_values2 is not None:
             img_embeds2 = self.extract_feature2(pixel_values2, attention_mask2)
-            print(f"img_embeds2.shape: {img_embeds2.shape}")
+            # print(f"img_embeds2.shape: {img_embeds2.shape}")
             
-            print(f"img_embeds2_after.shape: {img_embeds2.shape}")
+            # print(f"img_embeds2_after.shape: {img_embeds2.shape}")
             
             if self.use_vision_compression:
                 vit_embeds_compressed = self.vision_compressor_v1(vit_embeds)
                 img_embeds2_compressed = self.vision_compressor_v2(img_embeds2)
-                print(f"vit_embeds_compressed.shape: {vit_embeds_compressed.shape}")
-                print(f"img_embeds2_compressed.shape: {img_embeds2_compressed.shape}")
+                # print(f"vit_embeds_compressed.shape: {vit_embeds_compressed.shape}")
+                # print(f"img_embeds2_compressed.shape: {img_embeds2_compressed.shape}")
                 vit_embeds = vit_embeds_compressed
                 img_embeds2 = img_embeds2_compressed
 
                 # Compress image flags to match compressed embeddings
                 image_flags = self._compress_image_flags(image_flags)
                 image_flags2 = self._compress_image_flags(image_flags2)
-                print(f"compressed image_flags: {image_flags}")
-                print(f"compressed image_flags2: {image_flags2}")
+                # print(f"compressed image_flags: {image_flags}")
+                # print(f"compressed image_flags2: {image_flags2}")
                 
                 vit_embeds = vit_embeds[image_flags == 1]
                 img_embeds2 = img_embeds2[image_flags2 == 1]
@@ -464,11 +480,11 @@ class InternVLChatModel(PreTrainedModel):
             # concat the 2 embeddings
             # print(f"num_tiles: {num_tiles}")
             if num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles):
-                print("num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles)")
+                # print("num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles)")
                 vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
-                print(f"vit_embeds.shape: {vit_embeds.shape}")
+                # print(f"vit_embeds.shape: {vit_embeds.shape}")
                 vit_embeds = vit_embeds.reshape(-1, C)
-                print(f"vit_embeds_after.shape: {vit_embeds.shape}")
+                # print(f"vit_embeds_after.shape: {vit_embeds.shape}")
             else:
                 vision_embeddings = []
                 idx_v1, idx_v2 = 0, 0
@@ -567,7 +583,7 @@ class InternVLChatModel(PreTrainedModel):
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
-        print("-----------------end forward-----------------")
+        # print("-----------------end forward-----------------")
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
