@@ -21,6 +21,8 @@ from transformers import (AutoModel, GenerationConfig, LlamaForCausalLM,
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
+import torch
+import torch.nn.functional as F
 
 from timm.models.layers import trunc_normal_
 
@@ -37,6 +39,135 @@ def version_cmp(v1, v2, op='eq'):
     from packaging import version
     op_func = getattr(operator, op)
     return op_func(version.parse(v1), version.parse(v2))
+
+
+# refer perciever, qformer; causal?
+class QFormerBlock(nn.Module):
+    """QFormer block with cross attention and FFN"""
+    def __init__(self, hidden_size, num_heads=8, dropout=0.1):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        
+        # Cross attention layer
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        ) # todo
+        
+        # Layer normalization
+        self.ln1 = nn.LayerNorm(hidden_size)
+        self.ln2 = nn.LayerNorm(hidden_size)
+        
+        # FFN
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size * 4, hidden_size),
+            nn.Dropout(dropout)
+        )
+    
+    def forward(self, query, key_value):
+        """
+        Args:
+            query: [B, query_len, hidden_size]
+            key_value: [B, kv_len, hidden_size]
+        """
+        # Cross attention - properly handle both return values for DeepSpeed ZeRO-3 compatibility
+        attn_output, attn_weights = self.cross_attention(
+            query=query,
+            key=key_value,
+            value=key_value
+        )
+        
+        # Add & Norm
+        query = self.ln1(query + attn_output)
+        
+        # FFN
+        ffn_output = self.ffn(query)
+        
+        # Add & Norm  
+        output = self.ln2(query + ffn_output)
+        
+        # Ensure attn_weights affects computation graph: add negligible contribution
+        # Sum across attention dimensions and add tiny scaled contribution to output
+        attn_contribution = attn_weights.sum(dim=-1, keepdim=True).sum(dim=-2, keepdim=True) * 1e-10
+        # Expand to match output shape: [B, 1, 1] -> [B, query_len, hidden_size]
+        attn_contribution = attn_contribution.expand_as(output)
+        
+        return output + attn_contribution
+
+
+class VisionCompressor(nn.Module):
+    """Vision compressor using QFormer architecture"""
+    def __init__(self, hidden_size, compression_ratio=4, num_layers=4, num_heads=8):
+        super().__init__()
+        self.compression_ratio = compression_ratio
+        self.hidden_size = hidden_size
+        
+        # Learnable query tokens for compression
+        self.query_tokens = nn.Parameter(
+            torch.randn(1, 1, hidden_size) * 0.02
+        )
+        
+        # QFormer blocks
+        self.qformer_blocks = nn.ModuleList([
+            QFormerBlock(hidden_size, num_heads) for _ in range(num_layers)
+        ])
+        
+        # Initialize parameters
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.constant_(module.bias, 0)
+                nn.init.constant_(module.weight, 1.0)
+    
+    def forward(self, embeddings, is_video=False):
+        """
+        Compress vision embeddings using QFormer with static computation graph
+        
+        Args:
+            embeddings: [B, seq_len, hidden_size] or [total_frames, seq_len, hidden_size]
+            is_video: bool, whether input is video frames (deprecated - all inputs treated as video)
+            
+        Returns:
+            compressed_embeddings: [padded_groups, seq_len, hidden_size]
+        """
+        if embeddings is None or embeddings.size(0) == 0: # todo
+            return embeddings
+            
+        B, seq_len, hidden_size = embeddings.shape
+        
+        actual_groups = (B + self.compression_ratio - 1) // self.compression_ratio
+        padded_frames = actual_groups * self.compression_ratio
+        
+        padding_needed = padded_frames - B
+        if padding_needed > 0:
+            last_frame = embeddings[-1:].expand(padding_needed, -1, -1)
+            padded_embeddings = torch.cat([embeddings, last_frame], dim=0)
+        else:
+            padded_embeddings = embeddings
+            
+        group_embeddings = padded_embeddings.view(actual_groups, self.compression_ratio, seq_len, hidden_size)
+        
+        group_embeddings_flat = group_embeddings.view(actual_groups, self.compression_ratio * seq_len, hidden_size)
+        
+        query_tokens = self.query_tokens.expand(actual_groups, seq_len, hidden_size)
+        
+        compressed_tokens = query_tokens
+        for block in self.qformer_blocks:
+            compressed_tokens = block(compressed_tokens, group_embeddings_flat)
+        
+        return compressed_tokens
 
 
 class InternVLChatModel(PreTrainedModel):
@@ -61,6 +192,11 @@ class InternVLChatModel(PreTrainedModel):
         self.downsample_ratio = config.downsample_ratio
         self.ps_version = config.ps_version
         self.llm_arch_name = config.llm_config.architectures[0]
+        
+        # Compression parameters
+        self.use_vision_compression = getattr(config, 'use_vision_compression', True)
+        self.compression_ratio = getattr(config, 'compression_ratio', 4)
+        
         # Enable Flash Attention if supported, otherwise fall back to eager attention.
         use_flash_attn = use_flash_attn if has_flash_attn else False
         config.vision_config.use_flash_attn = True if use_flash_attn else False
@@ -68,6 +204,9 @@ class InternVLChatModel(PreTrainedModel):
 
         logger.info(f'num_image_token: {self.num_image_token}')
         logger.info(f'ps_version: {self.ps_version}')
+        logger.info(f'use_vision_compression: {self.use_vision_compression}')
+        logger.info(f'compression_ratio: {self.compression_ratio}')
+        
         if vision_model is not None:
             self.vision_model = vision_model
         else:
@@ -114,6 +253,21 @@ class InternVLChatModel(PreTrainedModel):
             nn.Linear(llm_hidden_size, llm_hidden_size)
         )
 
+        # Vision compression modules
+        if self.use_vision_compression:
+            self.vision_compressor_v1 = VisionCompressor(
+                hidden_size=llm_hidden_size,
+                compression_ratio=self.compression_ratio,
+                num_layers=4,
+                num_heads=8
+            )
+            self.vision_compressor_v2 = VisionCompressor(
+                hidden_size=llm_hidden_size,
+                compression_ratio=self.compression_ratio,
+                num_layers=4,
+                num_heads=8
+            )
+
         self.img_context_token_id = None
         self.conv_template = get_conv_template(self.template)
         if hasattr(config, 'system_message'):
@@ -150,6 +304,12 @@ class InternVLChatModel(PreTrainedModel):
         self.downsample2.apply(_initialize_weights)
         self.mlp2_patch.apply(_initialize_weights)
         self.mlp2_camera.apply(_initialize_weights)
+        
+        # Initialize compression modules if they exist
+        if self.use_vision_compression:
+            # The compression modules have their own initialization in their __init__
+            # But we can ensure they are properly initialized here
+            pass
 
     def wrap_backbone_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
         lora_config = LoraConfig(
@@ -210,15 +370,52 @@ class InternVLChatModel(PreTrainedModel):
         # image_flags2 = image_flags2.squeeze(-1)
         input_embeds = self.language_model.get_input_embeddings()(input_ids).clone()
         B, N, C = input_embeds.shape
-
         vit_embeds = self.extract_feature(pixel_values)
         vit_embeds = vit_embeds[image_flags == 1]
+        # video muti frames
+        # pixel_values.shape: torch.Size([14, 3, 448, 448]
+        # pixel_values2.shape: torch.Size([1, 14, 3, 518, 518])
+        # vit_embeds.shape: torch.Size([14, 64, 3584])
+        # img_embeds2.shape: torch.Size([14, 50, 3584])
+        # video one frame
+        # pixel_values.shape: torch.Size([1, 3, 448, 448])
+        # pixel_values2.shape: torch.Size([1, 2, 3, 518, 518])
+        # vit_embeds.shape: torch.Size([1, 64, 3584])
+        # img_embeds2.shape: torch.Size([1, 50, 3584])
+
         # import ipdb;ipdb.set_trace()
         # for encoder2
         if pixel_values2 is not None:
             img_embeds2 = self.extract_feature2(pixel_values2, attention_mask2)
             img_embeds2 = img_embeds2[image_flags2 == 1]
+            
+            if self.use_vision_compression:
+                vit_embeds_compressed = self.vision_compressor_v1(vit_embeds)
+                img_embeds2_compressed = self.vision_compressor_v2(img_embeds2)
+                
+                vit_embeds = vit_embeds_compressed
+                img_embeds2 = img_embeds2_compressed
+                
+                # Update num_tiles to reflect compressed structure
+                if num_tiles is not None and isinstance(num_tiles, list):
+                    updated_num_tiles = []
+                    for batch_tiles in num_tiles:
+                        if batch_tiles is None:
+                            updated_num_tiles.append(None)
+                        else:
+                            # Treat all cases as video: compress tile count according to compression ratio
+                            total_tiles = sum(batch_tiles) if isinstance(batch_tiles, list) else batch_tiles
+                            if isinstance(total_tiles, int) and total_tiles > 0:
+                                # Calculate compressed groups
+                                compressed_groups = (total_tiles + self.compression_ratio - 1) // self.compression_ratio
+                                updated_num_tiles.append([1] * compressed_groups)  # Each group becomes 1 tile
+                            else:
+                                updated_num_tiles.append([1])  # Fallback to single tile
+                    num_tiles = updated_num_tiles
+                    
+            
             # concat the 2 embeddings
+            # print(f"num_tiles: {num_tiles}")
             if num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles):
                 vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
                 vit_embeds = vit_embeds.reshape(-1, C)
@@ -229,6 +426,7 @@ class InternVLChatModel(PreTrainedModel):
                     if tb is None:
                         continue
                     for nt in tb:
+                        # After compression, each tile represents a compressed group
                         vision_embeddings.append(
                             torch.cat([img_embeds2[idx_v2], vit_embeds[idx_v1:idx_v1+nt].reshape(-1, C)], dim=0)
                         )

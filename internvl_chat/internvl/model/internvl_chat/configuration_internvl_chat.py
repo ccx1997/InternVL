@@ -37,6 +37,8 @@ class InternVLChatConfig(PretrainedConfig):
             ps_version='v1',
             min_dynamic_patch=1,
             max_dynamic_patch=6,
+            use_vision_compression=True,
+            compression_ratio=4,
             **kwargs):
         super().__init__(**kwargs)
 
@@ -72,6 +74,8 @@ class InternVLChatConfig(PretrainedConfig):
         self.ps_version = ps_version  # pixel shuffle version
         self.min_dynamic_patch = min_dynamic_patch
         self.max_dynamic_patch = max_dynamic_patch
+        self.use_vision_compression = use_vision_compression
+        self.compression_ratio = compression_ratio
 
         self.hidden_size = self.llm_config.hidden_size
         # By default, we use tie_word_embeddings=False for models of all sizes.
@@ -82,6 +86,8 @@ class InternVLChatConfig(PretrainedConfig):
         logger.info(f'ps_version: {self.ps_version}')
         logger.info(f'min_dynamic_patch: {self.min_dynamic_patch}')
         logger.info(f'max_dynamic_patch: {self.max_dynamic_patch}')
+        logger.info(f'use_vision_compression: {self.use_vision_compression}')
+        logger.info(f'compression_ratio: {self.compression_ratio}')
 
     def to_dict(self):
         """
@@ -105,5 +111,7 @@ class InternVLChatConfig(PretrainedConfig):
         output['ps_version'] = self.ps_version
         output['min_dynamic_patch'] = self.min_dynamic_patch
         output['max_dynamic_patch'] = self.max_dynamic_patch
+        output['use_vision_compression'] = self.use_vision_compression
+        output['compression_ratio'] = self.compression_ratio
 
         return output
