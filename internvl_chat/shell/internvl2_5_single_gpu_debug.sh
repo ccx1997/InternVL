@@ -5,7 +5,7 @@ BATCH_SIZE=${BATCH_SIZE:-2}
 PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=1
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 export MASTER_PORT=34018
@@ -34,10 +34,10 @@ torchrun \
   --conv_style "internvl2_5" \
   --use_fast_tokenizer False \
   --output_dir ${OUTPUT_DIR} \
-  --meta_path "./shell/data/data4debug.json" \
+  --meta_path "./shell/data/navila.json" \
   --overwrite_output_dir True \
   --force_image_size 448 \
-  --max_dynamic_patch 6 \
+  --max_dynamic_patch 1 \
   --down_sample_ratio 0.5 \
   --drop_path_rate 0.1 \
   --freeze_llm True \
@@ -60,7 +60,7 @@ torchrun \
   --warmup_ratio 0.03 \
   --lr_scheduler_type "cosine" \
   --logging_steps 1 \
-  --max_num_frame 16 \
+  --max_num_frame 8 \
   --max_seq_length 8192 \
   --do_train True \
   --grad_checkpoint True \
