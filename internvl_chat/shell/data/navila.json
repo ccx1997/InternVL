@@ -1,0 +1,37 @@
+{
+  "R2R": {
+    "root": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/R2R/train/",
+    "annotation": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/R2R/annotations.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 353894
+  },
+  "RxR": {
+    "root": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/RxR/train/",
+    "annotation": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/RxR/annotations.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 417578
+  },
+  "ScanQA": {
+    "root": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/ScanQA/videos",
+    "annotation": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/ScanQA/annotations/ScanQA_v1.0_train_reformat.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 25563
+  },
+    "Human": {
+    "root": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/Human/raw_frames/",
+    "annotation": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/Human/annotations_clean.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 555876
+  },
+    "EnvDrop": {
+    "root": "/mnt/zyy/habitat-lab/examples/images/vln_reference_path_example/geodesic_path",
+    "annotation": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/EnvDrop/annotations.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 146304
+  }
+}
