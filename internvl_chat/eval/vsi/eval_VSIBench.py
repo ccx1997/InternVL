@@ -25,6 +25,7 @@ def _to_float(x):
 def mra(pred, tgt):
     p, g = _to_float(pred), _to_float(tgt)
     if p is None or g is None:         # Cannot parse → 0
+        print(pred, tgt)
         return 0.0
     if abs(g) < 1e-8:                  # Division by zero protection
         return 1.0 if abs(p - g) < 1e-8 else 0.0
@@ -40,11 +41,41 @@ NUMERIC_QTYPES = {
 }
 
 # -------------------------------------------------------------------
+# 3.  PREDICTION STRING PROCESSING
+# -------------------------------------------------------------------
+def process_pred_string(pred_str):
+    """
+    Process prediction string:
+    - If it's a number, keep it as is
+    - If it's A...B... format, keep only the first option and uppercase
+    """
+    if not pred_str:
+        return pred_str
+    
+    # Convert to string and strip whitespace
+    pred_str = str(pred_str).strip()
+    
+    # Check if it's a number (integer or float)
+    if re.match(r'^-?\d+(\.\d+)?$', pred_str):
+        return pred_str
+    
+    # Check if it contains option format like A. or A) or just A
+    # Look for pattern: letter followed by optional dot/parenthesis
+    option_match = re.match(r'^([A-Za-z])[.)]*', pred_str)
+    if option_match:
+        # Return the first letter in uppercase
+        return option_match.group(1).upper()
+    
+    # If no specific pattern found, return as is
+    return pred_str
+
+# -------------------------------------------------------------------
 # 2.  MAIN
 # -------------------------------------------------------------------
 def main(pred, out):
     vsi = load_dataset("/mnt/chengchangxu/data/VSI-Bench")["test"]    # :contentReference[oaicite:1]{index=1}
-    gold = {int(row["id"]): row for row in vsi if ("object_rel_direction" in row["question_type"])}
+    gold = {int(row["id"]): row for row in vsi if ("object_rel_direction" in row["question_type"])}#if ("object_rel_direction" in row["question_type"]) ) if ("obj_appearance_order" in row["question_type"])
+    
     preds = {int(d["idx"]): d["prediction"] for d in json.load(open(pred))}
 
     # Completeness check -----------------------------------------------------
@@ -60,10 +91,15 @@ def main(pred, out):
     for idx, row in gold.items():
         # if idx>10:
         #     break
-        print(row)
+        # print(row)
+        # print(idx)
+        # print(preds[idx])
         qtype, gt, pred = row["question_type"], row["ground_truth"], preds[idx]
-        pred = pred[0]
+        
+        # Process prediction string
+        pred = process_pred_string(pred)
         if qtype in NUMERIC_QTYPES:
+            print(pred, gt)
             score = mra(pred, gt)
         else:                                              # MCA
             score = float(str(pred).strip().lower() ==
@@ -75,6 +111,7 @@ def main(pred, out):
     # Summary ----------------------------------------------------------
     report = {task: round(rec["numer"] / rec["denom"], 4)
               for task, rec in stat.items()}
+              
     report["overall"] = round(
         sum(r["numer"] for r in stat.values()) /
         sum(r["denom"] for r in stat.values()), 4)
