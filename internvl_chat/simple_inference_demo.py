@@ -12,7 +12,7 @@ python demo_internvl_dual.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"  # Commented out to avoid conflicts with other scripts
+# os.environ["CUDA_VISIBLE_DEVICES"] = "6"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
 from typing import List, Union

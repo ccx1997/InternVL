@@ -1058,6 +1058,8 @@ class LazyVLNCEDataset(Dataset):
         self.max_dynamic_patch = max_dynamic_patch
         self.normalize_type = normalize_type
 
+        self.num_img2_tokens = 7 * 7 + 1 # patch tokens and 1 camera token
+
         # If the precomputed length does not exist, roughly estimate the length of
         # each sample to improve the efficiency of group_by_length.
         if self.group_by_length:
@@ -1173,15 +1175,15 @@ class LazyVLNCEDataset(Dataset):
             image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
         )
         return ret
+
     def multi_modal_multi_image_get_item_VLNCE(self, data_item):
         # Build transformation function
         transform = self.get_transform()
 
         images, num_tiles = [], []
-
+        images2 = [] # for the new image encoder in the dual-vit system
 
         # 先把当前帧保留，然后前面的帧，如果超过上限，要均匀采样
-
         if len(data_item['image']) > self.max_num_frame:
             # import ipdb; ipdb.set_trace()
             result = []
@@ -1193,7 +1195,6 @@ class LazyVLNCEDataset(Dataset):
 
             data_item['image'] = result
 
-
         num_image = len(data_item['image'])
         for image_path in data_item['image']:
             # Merge the image path
@@ -1201,23 +1202,27 @@ class LazyVLNCEDataset(Dataset):
             # Load the image using tcs_loader if available, otherwise use PIL
             image = self.load_image(image_path)
             if self.dynamic_image_size:  # If dynamic image size is enabled, preprocess the image dynamically
-                image = dynamic_preprocess(image, min_num=self.min_dynamic_patch,
+                processed_images = dynamic_preprocess(image, min_num=self.min_dynamic_patch,
                                            max_num=max(1, self.max_dynamic_patch // num_image),
                                            image_size=self.image_size, use_thumbnail=self.use_thumbnail)
-                images += image
-                num_tiles.append(len(image))
+                images.extend(processed_images)
+                num_tiles.append(len(processed_images))
             else:  # Otherwise, use the original image as a single patch
                 images.append(image)
                 num_tiles.append(1)
+            images2.append(image)
+
         pixel_values = [transform(image) for image in images]
         pixel_values = torch.stack(pixel_values)
         num_patches = pixel_values.size(0)
+        # process for new image encoder
+        pixel_values2 = preprocess_images2(images2, mode="pad") # [K, 3, H, W]
 
         # Select the appropriate preprocessing function based on the template name
         preprocess_function = self.get_preprocess_function()
 
         # Preprocess the conversations and generate the return dictionary
-        num_image_tokens = [self.num_image_token * num_tile for num_tile in num_tiles]
+        num_image_tokens = [self.num_image_token * num_tile + self.num_img2_tokens for num_tile in num_tiles]
         ret = preprocess_function(self.template_name, [deepcopy(data_item['conversations'])],
                                   self.tokenizer, num_image_tokens, group_by_length=self.group_by_length,
                                   use_packed_ds=self.use_packed_ds, ds_name=self.ds_name, num_image=num_image)
@@ -1235,7 +1240,10 @@ class LazyVLNCEDataset(Dataset):
             attention_mask=ret['attention_mask'][0],
             position_ids=position_ids[0],
             pixel_values=pixel_values,
-            image_flags=torch.tensor([1] * num_patches, dtype=torch.long)
+            pixel_values2=pixel_values2,
+            image_flags=torch.tensor([1] * num_patches, dtype=torch.long),
+            image_flags2=torch.tensor([1] * pixel_values2.size(0), dtype=torch.long),
+            num_tiles=num_tiles,
         )
         return ret
     def multi_modal_multi_image_get_item(self, data_item):
@@ -1521,7 +1529,7 @@ def build_datasets(
         else:
             max_num = max_dynamic_patch
 
-        if 'R2R' in ds_name or 'RxR' in ds_name:
+        if 'R2R' in ds_name or 'RxR' in ds_name or 'Human' in ds_name:
             template_name = 'VLNCE'
             dataset = LazyVLNCEDataset(
                 template_name, ds_collections[ds_name],
