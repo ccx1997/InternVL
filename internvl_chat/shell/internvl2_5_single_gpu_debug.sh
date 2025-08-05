@@ -1,0 +1,73 @@
+set -x
+
+GPUS=${GPUS:-1}
+BATCH_SIZE=${BATCH_SIZE:-2}
+PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
+GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
+
+export CUDA_VISIBLE_DEVICES=1
+
+export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+export MASTER_PORT=34018
+export TF_CPP_MIN_LOG_LEVEL=3
+export LAUNCHER=pytorch
+export NCCL_DEBUG=WARN
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+
+pretrained_model_path='/mnt/chengchangxu/ckpt/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400'
+vision_path2='/mnt/models/VGGT-1B/model.pt'
+OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl2_5_8b_debug'
+
+if [ ! -d "$OUTPUT_DIR" ]; then
+  mkdir -p "$OUTPUT_DIR"
+fi
+
+torchrun \
+  --nnodes=1 \
+  --node_rank=0 \
+  --master_addr=127.0.0.1 \
+  --nproc_per_node=${GPUS} \
+  --master_port=${MASTER_PORT} \
+  internvl/train/internvl_chat_finetune.py \
+  --model_name_or_path ${pretrained_model_path} \
+  --vision_path2 ${vision_path2} \
+  --conv_style "internvl2_5" \
+  --use_fast_tokenizer False \
+  --output_dir ${OUTPUT_DIR} \
+  --meta_path "./shell/data/navila.json" \
+  --overwrite_output_dir True \
+  --force_image_size 448 \
+  --max_dynamic_patch 1 \
+  --down_sample_ratio 0.5 \
+  --drop_path_rate 0.1 \
+  --freeze_llm True \
+  --freeze_mlp True \
+  --freeze_backbone True \
+  --freeze_mlp2 False \
+  --freeze_vision2 True \
+  --vision_select_layer -1 \
+  --dataloader_num_workers 0 \
+  --bf16 True \
+  --num_train_epochs 1 \
+  --per_device_train_batch_size ${PER_DEVICE_BATCH_SIZE} \
+  --gradient_accumulation_steps ${GRADIENT_ACC} \
+  --evaluation_strategy "no" \
+  --save_strategy "steps" \
+  --save_steps 200 \
+  --save_total_limit 1 \
+  --learning_rate 4e-5 \
+  --weight_decay 0.05 \
+  --warmup_ratio 0.03 \
+  --lr_scheduler_type "cosine" \
+  --logging_steps 1 \
+  --max_num_frame 8 \
+  --max_seq_length 8192 \
+  --do_train True \
+  --grad_checkpoint True \
+  --group_by_length True \
+  --dynamic_image_size False \
+  --use_thumbnail True \
+  --ps_version 'v2' \
+  --deepspeed "zero_stage3_config_34b.json" \
+  --report_to "tensorboard" \
+  2>&1 | tee -a "${OUTPUT_DIR}/training_log.txt"

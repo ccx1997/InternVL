@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Batch inference script for ScanQA dataset using InternVL Chat Dual Encoder
+Batch inference script for VSI-Bench dataset using InternVL Chat Dual Encoder
 """
 import sys
 sys.path.append('/mnt/chensenda/codes/VLN/InternVL/internvl_chat')
-import os
 import argparse
 import json
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import sys
 import time
 import torch
@@ -30,9 +31,7 @@ from batch_inference_demo import (
     batch_inference
 )
 
-# Set CUDA device after imports to override any settings from imported modules
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
-
+# ... existing code ...
 
 class GPUMonitor:
     """Monitor GPU performance metrics"""
@@ -146,15 +145,19 @@ class GPUMonitor:
         print("="*50)
 
 
-def load_json(file_path: str) -> List[Dict[str, Any]]:
-    """Load JSON file and return list of records"""
+def load_jsonl(file_path: str) -> List[Dict[str, Any]]:
+    """Load JSONL file and return list of records"""
+    data = []
     with open(file_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+        for line in f:
+            line = line.strip()
+            if line:
+                data.append(json.loads(line))
     return data
 
 
 def extract_question_from_conversations(conversations: List[Dict]) -> str:
-    """Extract question from ScanQA conversations"""
+    """Extract question from conversations"""
     for conv in conversations:
         if conv.get('from') == 'human':
             # Remove <video> token from question 
@@ -171,16 +174,24 @@ def prepare_data_for_batch(samples: List[Dict[str, Any]], data_root: str) -> tup
     
     for sample in samples:
         sample_id = sample['id']
-        video_path = sample['video']  # Path is already absolute in SQA3D dataset
+        if 'video' in sample:
+            video_path = os.path.join(data_root, sample['video'])
+        else:
+            video_path = os.path.join(data_root, sample['image'])
         question = extract_question_from_conversations(sample['conversations'])
         
         if not os.path.exists(video_path):
-            print(f"Warning: Video not found: {video_path}")
+            print(f"Warning: Video/image not found: {video_path}")
             continue
         
-        # Add <video> token if not present
-        if '<video>' not in question:
-            question = '<video>\n' + question
+        # Add <video> token if not present and it's a video
+        if video_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
+            if '<video>' not in question:
+                question = '<video>\n' + question
+        else:
+            # For images, use <image> token
+            if '<image>' not in question:
+                question = '<image>\n' + question
         
         input_paths.append(video_path)
         questions.append(question)
@@ -201,56 +212,41 @@ def process_batch_samples(model, tokenizer, samples: List[Dict[str, Any]],
         return []
     
     try:
-        # Load video files
+        # Load media files
         media_batch = []
-        processed_questions = []
-        processed_sample_ids = []
-        
-        for i, input_path in enumerate(input_paths):
-            # Load video frames
-            imgs = load_video_frames(input_path,
-                                   min_frames=args.num_frames,
-                                   max_frames=args.num_frames,
-                                   sampling='rand')
-            
-            if not imgs:
-                print(f"Warning: Failed to load video: {input_path}")
-                continue
-            
-            # Create frame info for multiple video frames
-            frame_info = '\n'.join([f'Frame-{j+1}: <image>' for j in range(len(imgs))])
-            q = questions[i].replace('<video>', frame_info) if '<video>' in questions[i] \
-                else frame_info + '\n' + questions[i]
-            
-            media_batch.append(imgs)
-            processed_questions.append(q)
-            processed_sample_ids.append(sample_ids[i])
-        
-        if not media_batch:
-            return []
+        for input_path in input_paths:
+            if input_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
+                # Video processing
+                imgs = load_video_frames(input_path,
+                                       min_frames=args.num_frames,
+                                       max_frames=args.num_frames,
+                                       sampling='rand')
+                if not imgs:
+                    print(f"Warning: Failed to load video: {input_path}")
+                    media_batch.append([])
+                else:
+                    media_batch.append(imgs)
+            else:
+                # Image processing
+                try:
+                    imgs = [load_image(input_path)]
+                    media_batch.append(imgs)
+                except Exception as e:
+                    print(f"Warning: Failed to load image: {input_path}, {e}")
+                    media_batch.append([])
         
         # Run batch inference
-        results = batch_inference(model, tokenizer, media_batch, processed_questions, 
-                                args.max_tokens, batch_size=len(media_batch))
+        results = batch_inference(model, tokenizer, media_batch, questions, 
+                                args.max_tokens, batch_size=len(samples))
         
-        # Format results in ScanQA format
+        # Format results
         formatted_results = []
         for i, result in enumerate(results):
-            if i < len(processed_sample_ids):
-                # Find the original sample
-                original_sample = None
-                for sample in samples:
-                    if sample['id'] == processed_sample_ids[i]:
-                        original_sample = sample
-                        break
-                
-                if original_sample:
-                    result_sample = original_sample.copy()
-                    result_sample['conversations'].append({
-                        'from': 'internVL',
-                        'value': result['answer'].strip()
-                    })
-                    formatted_results.append(result_sample)
+            if i < len(sample_ids):
+                formatted_results.append({
+                    "idx": sample_ids[i],
+                    "prediction": result['answer'].strip()
+                })
         
         # Record metrics
         batch_end_time = time.time()
@@ -262,121 +258,27 @@ def process_batch_samples(model, tokenizer, samples: List[Dict[str, Any]],
     except Exception as e:
         print(f"Error processing batch: {e}")
         # Return empty results for failed samples
-        failed_results = []
-        for sample in samples:
-            result_sample = sample.copy()
-            result_sample['conversations'].append({
-                'from': 'internVL',
-                'value': ""
-            })
-            failed_results.append(result_sample)
-        return failed_results
-
-
-def uniform_sample_images(image_paths: List[str], num_frames: int = 16) -> List[str]:
-    """Uniformly sample num_frames images from the image path list"""
-    if len(image_paths) <= num_frames:
-        return image_paths
-    
-    # Calculate step size for uniform sampling
-    step = (len(image_paths) - 1) / (num_frames - 1)
-    sampled_indices = [int(round(i * step)) for i in range(num_frames)]
-    
-    # Ensure the last index is included
-    sampled_indices[-1] = len(image_paths) - 1
-    
-    return [image_paths[i] for i in sampled_indices]
-
-
-def process_single_sample(model, tokenizer, sample: Dict[str, Any], 
-                         data_root: str, args) -> Dict[str, Any]:
-    """Process a single sample and return prediction with ScanQA format"""
-    # This function is kept for compatibility but will be replaced by batch processing
-    try:
-        # Extract info from sample
-        sample_id = sample['id']
-        video_path = sample['video']  # Changed: now treat as single video file path
-        question = extract_question_from_conversations(sample['conversations'])
-        
-        # Check if video file exists
-        if not os.path.exists(video_path):
-            print(f"Warning: Video file not found: {video_path}")
-            # Return sample with empty internVL response
-            result_sample = sample.copy()
-            result_sample['conversations'].append({
-                'from': 'internVL',
-                'value': ""
-            })
-            return result_sample
-        
-        # Load video frames using the same method as simple_inference_demo.py
-        imgs = load_video_frames(video_path,
-                                min_frames=args.num_frames,
-                                max_frames=args.num_frames,
-                                sampling='rand')
-        
-        if not imgs:
-            print(f"Warning: Failed to load video frames for sample {sample_id}")
-            # Return sample with empty internVL response
-            result_sample = sample.copy()
-            result_sample['conversations'].append({
-                'from': 'internVL',
-                'value': ""
-            })
-            return result_sample
-        
-        # Create frame info for multiple video frames (same as simple_inference_demo.py)
-        frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
-        q = question.replace('<video>', frame_info) if '<video>' in question \
-            else frame_info + '\n' + question
-        
-        # Use batch inference with single sample
-        results = batch_inference(model, tokenizer, [imgs], [q], 
-                                args.max_tokens, batch_size=1)
-        
-        answer = results[0]['answer'] if results else ""
-        
-        # Prepare result in ScanQA format with conversations
-        result_sample = sample.copy()
-        
-        # Add internVL response to conversations
-        result_sample['conversations'].append({
-            'from': 'internVL',
-            'value': answer.strip()
-        })
-        
-        return result_sample
-        
-    except Exception as e:
-        print(f"Error processing sample {sample.get('id', 'unknown')}: {e}")
-        result_sample = sample.copy()
-        
-        # Add empty internVL response on error
-        result_sample['conversations'].append({
-            'from': 'internVL',
-            'value': ""
-        })
-        return result_sample
+        return [{"idx": sample_id, "prediction": ""} for sample_id in sample_ids]
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Batch inference for ScanQA dataset')
+    parser = argparse.ArgumentParser(description='Batch inference for VSI-Bench dataset')
     parser.add_argument('--checkpoint', 
-                        default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_4/checkpoint-2200',
+                        default='/mnt/chensenda/checkpoints/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_4/checkpoint-9600',
                         help='Path to dual-encoder checkpoint')
     parser.add_argument('--dataset', 
-                        default='/mnt/chensenda/codes/VLN/SQA3D/assets/data/sqa_task/balanced/test_reformat_std_video.json',
-                        help='Path to ScanQA dataset')
+                        default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/eval/robospatial/robospatial_test.jsonl',
+                        help='Path to VSI-Bench test dataset')
     parser.add_argument('--data-root',
-                        default='',  # Not needed since paths are absolute in the dataset
-                        help='Root directory for video files (not used as paths are absolute)')
+                        default='/mnt/chengchangxu/data/VSI-Bench/',
+                        help='Root directory for video/image files')
     parser.add_argument('--output', 
-                        default='sqa_predictions_avgpool_stage2_4_2200_2.json',
+                        default='robospatial_predictions_2.4_9600.json',
                         help='Output file for predictions')
     parser.add_argument('--num-frames', type=int, default=32,
-                        help='Number of frames to sample from each video file')
-    parser.add_argument('--max-patches', type=int, default=1,
-                        help='Dynamic patches per video frame')
+                        help='Number of video frames to sample')
+    parser.add_argument('--max-patches', type=int, default=4,
+                        help='Dynamic patches per image')
     parser.add_argument('--max-tokens', type=int, default=512,
                         help='Maximum generation length')
     parser.add_argument('--start-idx', type=int, default=0,
@@ -400,7 +302,8 @@ def main():
 
     # Load dataset
     print(f"Loading dataset from {args.dataset}")
-    dataset = load_json(args.dataset)
+    print(f"save file: {args.output}")
+    dataset = load_jsonl(args.dataset)
     print(f"Loaded {len(dataset)} samples")
     
     # Determine processing range
@@ -420,30 +323,29 @@ def main():
         batch_end = min(i + args.batch_size, len(dataset_subset))
         batch_samples = dataset_subset[i:batch_end]
         
-        count += len(batch_samples)
-        if count < 2000:
-            continue
+        # Filter samples by type if needed (uncomment to filter)
+        # filtered_samples = []
+        # for sample in batch_samples:
+        #     if "object_rel_direction" in sample['type'] or "object_counting" in sample['type'] or "object_size_estimation" in sample['type']:
+        #         filtered_samples.append(sample)
+        # batch_samples = filtered_samples
         
+        if not batch_samples:
+            continue
+            
+        count += len(batch_samples)
+        # if count > 20:
+        #     continue
         # Process batch
         batch_results = process_batch_samples(model, tokenizer, batch_samples, 
-                                            args.data_root, args, gpu_monitor)
+                                            "/mnt/chensenda/codes/VLN/InternVL/internvl_chat/eval/robospatial", args, gpu_monitor)
         results.extend(batch_results)
         
-        # Print progress every 10 batches
-        if len(results) > 0 and (i // args.batch_size) % 10 == 0:
+        # Print progress
+        if len(results) > 0 and len(results) % (args.batch_size * 10) == 0:
             elapsed_time = time.time() - total_start_time
             samples_per_sec = len(results) / elapsed_time
-            # Get the latest internVL response for progress display
-            latest_result = results[-1] if results else {}
-            internvl_response = ""
-            if 'conversations' in latest_result:
-                for conv in latest_result['conversations']:
-                    if conv.get('from') == 'internVL':
-                        internvl_response = conv.get('value', '')
-                        break
-            
-            sample_id = latest_result.get('id', 'unknown')
-            print(f"Processed {len(results)} samples. Latest: id={sample_id}, prediction='{internvl_response[:50]}...', Speed: {samples_per_sec:.2f} samples/sec")
+            print(f"Processed {len(results)} samples. Speed: {samples_per_sec:.2f} samples/sec")
     
     print(f"Processed {count} samples in {len(results)} results")
     
