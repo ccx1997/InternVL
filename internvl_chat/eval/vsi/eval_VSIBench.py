@@ -39,30 +39,63 @@ NUMERIC_QTYPES = {
     "object_abs_distance",
 }
 
+def process_pred_string(pred_str):
+    """
+    Process prediction string:
+    - If it's a number, keep it as is
+    - If it's A...B... format, keep only the first option and uppercase
+    """
+    if not pred_str:
+        return pred_str
+    
+    # Convert to string and strip whitespace
+    pred_str = str(pred_str).strip()
+    
+    # Check if it's a number (integer or float)
+    if re.match(r'^-?\d+(\.\d+)?$', pred_str):
+        return pred_str
+    
+    # Check if it contains option format like A. or A) or just A
+    # Look for pattern: letter followed by optional dot/parenthesis
+    option_match = re.match(r'^([A-Za-z])[.)]*', pred_str)
+    if option_match:
+        # Return the first letter in uppercase
+        return option_match.group(1).upper()
+    
+    # If no specific pattern found, return as is
+    return pred_str
+
 # -------------------------------------------------------------------
 # 2.  MAIN
 # -------------------------------------------------------------------
 def main(pred, out):
     vsi = load_dataset("/mnt/chengchangxu/data/VSI-Bench")["test"]    # :contentReference[oaicite:1]{index=1}
-    gold = {int(row["id"]): row for row in vsi if ("object_rel_direction" in row["question_type"])}
+    gold = {int(row["id"]): row for row in vsi}
     preds = {int(d["idx"]): d["prediction"] for d in json.load(open(pred))}
 
     # Completeness check -----------------------------------------------------
     miss = set(gold) - set(preds)
     extra = set(preds) - set(gold)
-    # if miss:
-    #     raise ValueError(f"Missing {len(miss)} idx, e.g. {next(iter(miss))}")
-    # if extra:
-    #     print(f"[Warn] Ignore {len(extra)} unknown idx (e.g. {next(iter(extra))}).")
+    if miss:
+        print(f"[Warn] Ignore {len(miss)} missing idx (e.g. {next(iter(miss))}).")
+        # raise ValueError(f"Missing {len(miss)} idx, e.g. {next(iter(miss))}")
+    if extra:
+        print(f"[Warn] Ignore {len(extra)} unknown idx (e.g. {next(iter(extra))}).")
 
     # Accumulate scores by task -----------------------------------------------
     stat = defaultdict(lambda: {"numer": 0.0, "denom": 0})
+    results_checked = []
     for idx, row in gold.items():
         # if idx>10:
         #     break
-        print(row)
+        # print(row)
+        if idx not in preds:
+            continue
+        # if idx == 238:
+        #     import ipdb; ipdb.set_trace()
+
         qtype, gt, pred = row["question_type"], row["ground_truth"], preds[idx]
-        pred = pred[0]
+        pred = process_pred_string(pred)
         if qtype in NUMERIC_QTYPES:
             score = mra(pred, gt)
         else:                                              # MCA
@@ -71,10 +104,20 @@ def main(pred, out):
         s = stat[qtype]
         s["numer"] += score
         s["denom"] += 1
+        # record score details
+        res = row
+        res["pred"] = pred
+        res["score"] = score
+        results_checked.append(res)
 
     # Summary ----------------------------------------------------------
     report = {task: round(rec["numer"] / rec["denom"], 4)
               for task, rec in stat.items()}
+    # merge object_rel_direction
+    report["object_rel_direction*"] = round(
+        sum(tr["numer"] for tn, tr in stat.items() if "object_rel_direction" in tn) /
+        sum(tr["denom"] for tn, tr in stat.items() if "object_rel_direction" in tn), 4)
+
     report["overall"] = round(
         sum(r["numer"] for r in stat.values()) /
         sum(r["denom"] for r in stat.values()), 4)
@@ -82,6 +125,7 @@ def main(pred, out):
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if out:
         json.dump(report, open(out, "w"), indent=2, ensure_ascii=False)
+        json.dump(results_checked, open(out.replace(".json", "_details.json"), "w"), indent=2, ensure_ascii=False)
 
 # -------------------------------------------------------------------
 if __name__ == "__main__":

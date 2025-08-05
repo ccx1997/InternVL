@@ -3,13 +3,15 @@
 Batch inference script for VSI-Bench dataset using InternVL Chat Dual Encoder
 """
 import sys
-sys.path.append('/mnt/chensenda/codes/VLN/InternVL/internvl_chat')
+sys.path.append('/mnt/chensenda/codes/VLN/InternVL_video/internvl_chat')
 import argparse
 import json
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '6'
 import sys
 import time
+import random
+random.seed(42)
+
 import torch
 from tqdm import tqdm
 from typing import List, Dict, Any
@@ -230,12 +232,13 @@ def main():
     parser.add_argument('--data-root',
                         default='/mnt/chengchangxu/data/VSI-Bench/',
                         help='Root directory for video/image files')
+    parser.add_argument('--random-sample', type=int, default=-1, help="Random sample the dataset to a certain number (-1 for all)")
     parser.add_argument('--output', 
                         default='vsi_bench_predictions_avgpool_stage2_3-object_rel_direction.json',
                         help='Output file for predictions')
     parser.add_argument('--num-frames', type=int, default=32,
                         help='Number of video frames to sample')
-    parser.add_argument('--max-patches', type=int, default=4,
+    parser.add_argument('--max-patches', type=int, default=1,
                         help='Dynamic patches per image')
     parser.add_argument('--max-tokens', type=int, default=512,
                         help='Maximum generation length')
@@ -265,6 +268,8 @@ def main():
     start_idx = args.start_idx
     end_idx = len(dataset) if args.end_idx == -1 else min(args.end_idx, len(dataset))
     dataset_subset = dataset[start_idx:end_idx]
+    if args.random_sample > 0:
+        dataset_subset = random.sample(dataset_subset, min(args.random_sample, len(dataset_subset)))
     
     print(f"Processing samples {start_idx} to {end_idx-1} ({len(dataset_subset)} samples)")
 
@@ -274,8 +279,8 @@ def main():
     total_start_time = time.time()
     
     for sample in tqdm(dataset_subset, desc="Processing samples"):
-        if "object_rel_direction" not in sample['type'] and "object_counting" not in sample['type'] and "object_size_estimation" not in sample['type']:
-            continue
+        # if "object_rel_direction" not in sample['type'] and "object_counting" not in sample['type'] and "object_size_estimation" not in sample['type']:
+        #     continue
         count += 1
         # if count > 10:
         #     break

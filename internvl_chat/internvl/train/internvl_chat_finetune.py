@@ -192,6 +192,10 @@ class ModelArguments:
         default=True,
         metadata={'help': 'Set to False to unfreeze the vision2. Default is True.'},
     )
+    freeze_vision_compressor: bool = field(
+        default=False,
+        metadata={'help': 'Set to True to freeze the vision compressor. Default is False.'},
+    )
     vision_select_layer: int = field(
         default=-1,
         metadata={'help': 'Specify the layer of ViT feature map to use. Default is -1 for the last layer.'},
@@ -1324,7 +1328,7 @@ def main():
 
     if model_args.vision_path2 is not None:
         # logger.info('Loading VGGT Encoder...')
-        # load_vggt_params_in_internvl(model, model_args.vision_path2)
+        load_vggt_params_in_internvl(model, model_args.vision_path2)
         logger.warn('Original VGGT params are used in stage 1, not in stage 2')
 
     assert model.config.downsample_ratio == data_args.down_sample_ratio
@@ -1403,6 +1407,9 @@ def main():
         _freeze_params(model.mlp2_patch)
         _freeze_params(model.mlp2_camera)
         _freeze_params(model.downsample2)
+
+    if model_args.freeze_vision_compressor:
+        _freeze_params(model.vision_compressor)
 
     if model_args.freeze_vision2:
         _freeze_params(model.vision_model2)

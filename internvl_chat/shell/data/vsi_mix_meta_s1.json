@@ -4,15 +4,8 @@
     "annotation": "multispatialmllm_train.jsonl",
     "data_dir": "/mnt/ywt/workspace/spatial_datasets/Multi-SpatialMLLM/training_data/camera_movement/v1_0",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.1,
     "length": 750000
-  },
-  "roboSpatial":{
-    "root": "",
-    "annotation": "/mnt/chensenda/codes/RoboSpatial/scripts/training_data.jsonl",
-    "data_augment": false,
-    "repeat_time": 1,
-    "length": 575090
   },
   "spacer_151k": {
     "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
@@ -22,12 +15,19 @@
     "repeat_time": 1,
     "length": 121313
   },
+  "0_30_s_youtube_oe_v0_1": {
+    "root": "/mnt/chengchangxu/data/LLaVA-Video-178K/",
+    "annotation": "/mnt/chengchangxu/data/LLaVA-Video-178K/0_30_s_youtube_v0_1/0_30_s_youtube_oe_v0_1_qa_processed_filtered.json",
+    "data_augment": false,
+    "repeat_time": 0.5,
+    "length": 420194
+  },
   "objects365": {
     "root": "",
     "annotation": "/mnt/chengchangxu/data/Objects365/objects365_train_450k.json",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.1,
     "length": 450000
   },
   "boxcotrd": {
@@ -83,7 +83,7 @@
     "annotation": "/mnt/liuyi/datasets/GQA/gqa_balanced.jsonl",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.5,
     "length": 268616
   },
   "synth_clock": {
@@ -99,7 +99,7 @@
     "annotation": "/mnt/chengchangxu/data/MMInstruct-GPT4V_filter_zh_222269.json",
     "data_dir": "",
     "data_augment": false,
-    "repeat_time": 1,
+    "repeat_time": 0.5,
     "length": 222266
   },
   "aokvqa": {

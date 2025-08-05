@@ -3,13 +3,13 @@
     "data": [
         {
             "meta": "./shell/data/vsi_train.json",
-            "ratio": 0.85,
-            "length": 1377313
+            "ratio": 2,
+            "length": 392235
         },
         {
             "meta": "./shell/data/llava_video_178k.json",
-            "ratio": 0.5,
-            "length": 898978
+            "ratio": 0.25,
+            "length": 1395533
         },
         {
             "meta": "./shell/data/visual_grounding.json",
@@ -18,7 +18,7 @@
         },
         {
             "meta": "./shell/data/general_mm.json",
-            "ratio": 0.25,
+            "ratio": 0.1,
             "length": 2236170
         },
         {

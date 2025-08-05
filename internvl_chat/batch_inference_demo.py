@@ -25,7 +25,7 @@ python batch_inference_demo.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"  # Commented out to avoid conflicts with other scripts
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
 from typing import List, Union, Dict, Any

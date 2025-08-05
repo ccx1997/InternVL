@@ -1,3 +1,4 @@
+import re
 import torch
 import torch.distributed as dist
 
@@ -17,6 +18,8 @@ def load_vggt_params_in_internvl(model, vggt_path):
             for k, v in vggt_state_dict.items():
                 if k.startswith('aggregator.'):
                     new_k = k.replace('aggregator.', '')
+                    if all(kw in new_k for kw in ['ls', 'gamma']):
+                        new_k = re.sub(r'gamma$', 'weight', new_k)
                     if new_k in vision2_model_state_dict:
                         if v.shape == vision2_model_state_dict[new_k].shape:
                             vggt_aggregator_state_dict[new_k] = v.to(vision2_model_state_dict[new_k].dtype)
@@ -34,6 +37,8 @@ def load_vggt_params_in_internvl(model, vggt_path):
         for k, v in vggt_state_dict.items():
             if k.startswith('aggregator.'):
                 new_k = k.replace('aggregator.', '')
+                if all(kw in new_k for kw in ['ls', 'gamma']):
+                    new_k = re.sub(r'gamma$', 'weight', new_k)
                 if new_k in vision2_model_state_dict:
                     if v.shape == vision2_model_state_dict[new_k].shape:
                         vggt_aggregator_state_dict[new_k] = v.to(vision2_model_state_dict[new_k].dtype)

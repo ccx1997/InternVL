@@ -12,7 +12,6 @@ python demo_internvl_dual.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
 from typing import List, Union
@@ -197,7 +196,7 @@ def load_model_and_tokenizer(ckpt):
         ckpt,
         config=cfg,
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        device_map='cuda'
+        device_map='auto'
     )
 
     model.img_context_token_id = tok.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)

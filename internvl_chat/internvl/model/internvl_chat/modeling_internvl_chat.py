@@ -43,34 +43,58 @@ def version_cmp(v1, v2, op='eq'):
 
 # refer perciever, qformer; causal?
 class QFormerBlock(nn.Module):
-    """QFormer block with cross attention and FFN"""
+    """QFormer block with self-attention, cross-attention and FFN"""
     def __init__(self, hidden_size, num_heads=8, dropout=0.1):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         assert self.head_dim * num_heads == hidden_size, "hidden_size must be divisible by num_heads"
+        assert self.head_dim % 4 == 0
         
-        # Query, Key, Value projections for cross attention
-        self.query_proj = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.key_proj = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.value_proj = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        # Self-attention
+        # self.self_attn_ln = nn.LayerNorm(hidden_size)
+        # self.self_query_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        # self.self_key_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        # self.self_value_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        # self.self_out_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        
+        # Cross-attention
+        self.cross_attn_ln = nn.LayerNorm(hidden_size)
+        self.cross_query_proj = nn.Linear(hidden_size, hidden_size//4, bias=False)
+        self.cross_key_proj = nn.Linear(hidden_size, hidden_size//4, bias=False)
+        self.cross_value_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.cross_out_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        
+        # FFN
+        self.ffn_ln = nn.LayerNorm(hidden_size)
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size // 2, hidden_size),
+            nn.Dropout(dropout)
+        )
         
         self.dropout = dropout
         
-        # Layer normalization
-        self.ln1 = nn.LayerNorm(hidden_size)
-        self.ln2 = nn.LayerNorm(hidden_size)
+        # Learnable scaling parameters to prevent gradient vanishing
+        # self.self_attn_scale = nn.Parameter(torch.ones(hidden_size) * 0.1)
+        self.cross_attn_scale = nn.Parameter(torch.ones(hidden_size) * 0.001)
+        self.ffn_scale = nn.Parameter(torch.ones(hidden_size) * 0.001)
         
-        # FFN
-        self.ffn = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size * 4),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size * 4, hidden_size),
-            nn.Dropout(dropout)
-        )
+        # Initialize weights
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        """Initialize weights using the same pattern as line 372"""
+        def _initialize_weights_helper(m):
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                trunc_normal_(m.weight, std=.01, a=-1.0, b=1.0)
+                if m.bias is not None:
+                    m.bias.data.fill_(0)
+        
+        self.apply(_initialize_weights_helper)
     
     def forward(self, query, key_value):
         """
@@ -78,55 +102,86 @@ class QFormerBlock(nn.Module):
             query: [B, query_len, hidden_size]
             key_value: [B, kv_len, hidden_size]
         """
-        # Cross attention
         B, query_len, _ = query.shape
+        # Self-attention
+        # residual = query·
+        # query = self.self_attn_ln(query)
+        
+        # # Self-attention computation
+        # q = self.self_query_proj(query)
+        # k = self.self_key_proj(query)
+        # v = self.self_value_proj(query)
+        
+        # # Reshape for multi-head attention
+        # q = q.view(B, query_len, self.num_heads, self.head_dim).transpose(1, 2)
+        # k = k.view(B, query_len, self.num_heads, self.head_dim).transpose(1, 2)
+        # v = v.view(B, query_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # # Scaled dot-product attention
+        # attn_output = F.scaled_dot_product_attention(
+        #     q, k, v,
+        #     dropout_p=self.dropout if self.training else 0.0,
+        #     is_causal=False
+        # )
+        
+        # # Reshape back
+        # attn_output = attn_output.transpose(1, 2).contiguous().view(B, query_len, self.hidden_size)
+        # attn_output = self.self_out_proj(attn_output)
+        
+        # # Residual connection with learnable scaling
+        # query = residual + self.self_attn_scale * attn_output
+        
+        # Cross-attention
+        residual = query
+        query = self.cross_attn_ln(query)
+        
         B, kv_len, _ = key_value.shape
         
-        # Project to Q, K, V
-        q = self.query_proj(query)  # [B, query_len, hidden_size]
-        k = self.key_proj(key_value)  # [B, kv_len, hidden_size]
-        v = self.value_proj(key_value)  # [B, kv_len, hidden_size]
+        # Cross-attention computation
+        q = self.cross_query_proj(query)
+        k = self.cross_key_proj(key_value)
+        v = self.cross_value_proj(key_value)
         
         # Reshape for multi-head attention
-        q = q.view(B, query_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, num_heads, query_len, head_dim]
-        k = k.view(B, kv_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, num_heads, kv_len, head_dim]
-        v = v.view(B, kv_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, num_heads, kv_len, head_dim]
+        q = q.view(B, query_len, self.num_heads, self.head_dim//4).transpose(1, 2)
+        k = k.view(B, kv_len, self.num_heads, self.head_dim//4).transpose(1, 2)
+        v = v.view(B, kv_len, self.num_heads, self.head_dim).transpose(1, 2)
         
         # Scaled dot-product attention
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout if self.training else 0.0,
             is_causal=False
-        )  # [B, num_heads, query_len, head_dim]
+        )
         
         # Reshape back
-        attn_output = attn_output.transpose(1, 2).contiguous().view(B, query_len, self.hidden_size)  # [B, query_len, hidden_size]
+        attn_output = attn_output.transpose(1, 2).contiguous().view(B, query_len, self.hidden_size)
+        attn_output = self.cross_out_proj(attn_output)
         
-        # Output projection
-        attn_output = self.out_proj(attn_output)
-        
-        # Add & Norm
-        query = self.ln1(query + attn_output)
+        # Residual connection with learnable scaling
+        query = residual + self.cross_attn_scale * attn_output
         
         # FFN
+        residual = query
+        query = self.ffn_ln(query)
         ffn_output = self.ffn(query)
         
-        # Add & Norm  
-        output = self.ln2(query + ffn_output)
-        
+        # Residual connection with learnable scaling
+        output = residual + self.ffn_scale * ffn_output
         return output
 
 
 class VisionCompressor(nn.Module):
     """Vision compressor using QFormer architecture"""
-    def __init__(self, hidden_size, compression_ratio=4, num_layers=4, num_heads=8):
+    def __init__(self, hidden_size, compression_ratio=4, num_layers=6, num_heads=8, num_query=64):
         super().__init__()
         self.compression_ratio = compression_ratio
         self.hidden_size = hidden_size
+        self.num_query = num_query
         
         # Learnable query tokens for compression
         self.query_tokens = nn.Parameter(
-            torch.randn(1, 1, hidden_size) * 0.02
+            torch.randn(1, num_query, hidden_size)
         )
         
         # QFormer blocks
@@ -134,18 +189,23 @@ class VisionCompressor(nn.Module):
             QFormerBlock(hidden_size, num_heads) for _ in range(num_layers)
         ])
         
-        # Initialize parameters
+        # Mark as uninitialized - will be initialized by parent model
         self._initialize_weights()
     
     def _initialize_weights(self):
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                trunc_normal_(module.weight, std=0.02)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-            elif isinstance(module, nn.LayerNorm):
-                nn.init.constant_(module.bias, 0)
-                nn.init.constant_(module.weight, 1.0)
+        """Initialize weights for VisionCompressor only, not recursively for all submodules"""
+        # Initialize query tokens with safe normal distribution
+        nn.init.normal_(self.query_tokens, mean=0.0, std=0.02)
+        
+        # Initialize QFormer blocks using the same pattern as line 372
+        def _initialize_weights_helper(m):
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                trunc_normal_(m.weight, std=.01, a=-1.0, b=1.0)
+                if m.bias is not None:
+                    m.bias.data.fill_(0)
+        
+        for block in self.qformer_blocks:
+            block.apply(_initialize_weights_helper)
     
     def forward(self, embeddings, is_video=False):
         """
@@ -174,9 +234,13 @@ class VisionCompressor(nn.Module):
         
         group_embeddings_flat = group_embeddings.view(actual_groups, self.compression_ratio * seq_len, hidden_size)
         
-        query_tokens = self.query_tokens.expand(actual_groups, seq_len, hidden_size)
+        # Add query tokens to the first image embeddings
+        compressed_tokens = self.query_tokens.expand(actual_groups, -1, -1)  # [actual_groups, num_query, hidden_size]
         
-        compressed_tokens = query_tokens
+        # Add first embedding from each group to query tokens
+        first_embeddings = group_embeddings[:, 0, :, :]  # [actual_groups, seq_len, hidden_size]
+        compressed_tokens = compressed_tokens + first_embeddings
+        
         for block in self.qformer_blocks:
             compressed_tokens = block(compressed_tokens, group_embeddings_flat)
         
@@ -188,7 +252,7 @@ class InternVLChatModel(PreTrainedModel):
     main_input_name = 'pixel_values'
     base_model_prefix = 'language_model'
     _no_split_modules = ['InternVisionModel', 'LlamaDecoderLayer', 'InternLM2DecoderLayer',
-                         'Phi3DecoderLayer', 'Qwen2DecoderLayer', 'DinoVisionTransformer', 'VGGTBlock']
+                         'Phi3DecoderLayer', 'Qwen2DecoderLayer', 'DinoVisionTransformer', 'VGGTBlock', 'QFormerBlock']
     _supports_flash_attn_2 = True
     supports_gradient_checkpointing = True
 
@@ -268,17 +332,12 @@ class InternVLChatModel(PreTrainedModel):
 
         # Vision compression modules
         if self.use_vision_compression:
-            self.vision_compressor_v1 = VisionCompressor(
+            self.vision_compressor = VisionCompressor(
                 hidden_size=llm_hidden_size,
                 compression_ratio=self.compression_ratio,
-                num_layers=4,
-                num_heads=8
-            )
-            self.vision_compressor_v2 = VisionCompressor(
-                hidden_size=llm_hidden_size,
-                compression_ratio=self.compression_ratio,
-                num_layers=4,
-                num_heads=8
+                num_layers=1,
+                num_heads=8,
+                num_query=114  # 64 + 50
             )
 
         self.img_context_token_id = None
@@ -344,12 +403,6 @@ class InternVLChatModel(PreTrainedModel):
         self.downsample2.apply(_initialize_weights)
         self.mlp2_patch.apply(_initialize_weights)
         self.mlp2_camera.apply(_initialize_weights)
-        
-        # Initialize compression modules if they exist
-        if self.use_vision_compression:
-            # The compression modules have their own initialization in their __init__
-            # But we can ensure they are properly initialized here
-            pass
 
     def wrap_backbone_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
         lora_config = LoraConfig(
@@ -442,64 +495,93 @@ class InternVLChatModel(PreTrainedModel):
             
             # print(f"img_embeds2_after.shape: {img_embeds2.shape}")
             
-            if self.use_vision_compression:
-                vit_embeds_compressed = self.vision_compressor_v1(vit_embeds)
-                img_embeds2_compressed = self.vision_compressor_v2(img_embeds2)
-                # print(f"vit_embeds_compressed.shape: {vit_embeds_compressed.shape}")
-                # print(f"img_embeds2_compressed.shape: {img_embeds2_compressed.shape}")
-                vit_embeds = vit_embeds_compressed
-                img_embeds2 = img_embeds2_compressed
-
-                # Compress image flags to match compressed embeddings
-                image_flags = self._compress_image_flags(image_flags)
-                image_flags2 = self._compress_image_flags(image_flags2)
-                # print(f"compressed image_flags: {image_flags}")
-                # print(f"compressed image_flags2: {image_flags2}")
-                
-                vit_embeds = vit_embeds[image_flags == 1]
-                img_embeds2 = img_embeds2[image_flags2 == 1]
-                
-                # Update num_tiles to reflect compressed structure
-                if num_tiles is not None and isinstance(num_tiles, list):
-                    updated_num_tiles = []
-                    for batch_tiles in num_tiles:
-                        if batch_tiles is None:
-                            updated_num_tiles.append(None)
-                        else:
-                            # Treat all cases as video: compress tile count according to compression ratio
-                            total_tiles = sum(batch_tiles) if isinstance(batch_tiles, list) else batch_tiles
-                            if isinstance(total_tiles, int) and total_tiles > 0:
-                                # Calculate compressed groups
-                                compressed_groups = (total_tiles + self.compression_ratio - 1) // self.compression_ratio
-                                updated_num_tiles.append([1] * compressed_groups)  # Each group becomes 1 tile
-                            else:
-                                updated_num_tiles.append([1])  # Fallback to single tile
-                    num_tiles = updated_num_tiles
-                    
-            
-            # concat the 2 embeddings
+            # First concatenate the 2 embeddings, then compress
             # print(f"num_tiles: {num_tiles}")
             if num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles):
                 # print("num_tiles is None or isinstance(num_tiles, list) and all(tb is None for tb in num_tiles)")
-                vit_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
-                # print(f"vit_embeds.shape: {vit_embeds.shape}")
-                vit_embeds = vit_embeds.reshape(-1, C)
+                # Concatenate embeddings first: [N, 50, C] + [N, 64, C] -> [N, 114, C]
+                combined_embeds = torch.cat([img_embeds2, vit_embeds], dim=1)
+                # print(f"combined_embeds.shape: {combined_embeds.shape}")
+                
+                if self.use_vision_compression:
+                    # Compress the combined embeddings using single compressor
+                    combined_embeds_compressed = self.vision_compressor(combined_embeds)
+                    # print(f"combined_embeds_compressed.shape: {combined_embeds_compressed.shape}")
+                    combined_embeds = combined_embeds_compressed
+                    
+                    # Compress image flags to match compressed embeddings
+                    image_flags = self._compress_image_flags(image_flags)
+                    image_flags2 = self._compress_image_flags(image_flags2)
+                    # print(f"compressed image_flags: {image_flags}")
+                    # print(f"compressed image_flags2: {image_flags2}")
+                    
+                    # Filter based on image_flags (both should be the same for combined processing)
+                    combined_embeds = combined_embeds[image_flags == 1]
+                
+                vit_embeds = combined_embeds.reshape(-1, C)
                 # print(f"vit_embeds_after.shape: {vit_embeds.shape}")
             else:
-                vision_embeddings = []
+                # Handle tile-based processing
+                # First, collect all tiles with concatenated embeddings
+                all_combined_embeds = []
                 idx_v1, idx_v2 = 0, 0
                 for tb in num_tiles:
                     if tb is None:
                         continue
                     for nt in tb:
-                        # After compression, each tile represents a compressed group
-                        vision_embeddings.append(
-                            torch.cat([img_embeds2[idx_v2], vit_embeds[idx_v1:idx_v1+nt].reshape(-1, C)], dim=0)
-                        )
+                        # Check if nt is 1, warn if not since current implementation only supports nt=1
+                        if nt != 1:
+                            import warnings
+                            warnings.warn(f"Current implementation only supports num_tiles value of 1, but got {nt}. "
+                                        f"This may cause unexpected behavior.", UserWarning)
+                        
+                        # Concatenate embeddings for each tile: [1, 50, C] + [nt, 64, C] -> [1, 50+64*nt, C]
+                        tile_img_embeds2 = img_embeds2[idx_v2:idx_v2+1]  # [1, 50, C]
+                        tile_vit_embeds = vit_embeds[idx_v1:idx_v1+nt]   # [nt, 64, C]
+                        combined_tile = torch.cat([tile_img_embeds2, tile_vit_embeds], dim=1)  # [1, 50+64*nt, C]
+                        all_combined_embeds.append(combined_tile)
                         idx_v1 += nt
                         idx_v2 += 1
-                if len(vision_embeddings) > 0:
-                    vit_embeds = torch.cat(vision_embeddings, dim=0)
+                
+                if len(all_combined_embeds) > 0:
+                    # Stack all tiles for compression: [num_tiles, 50+64*nt, C]
+                    combined_embeds = torch.cat(all_combined_embeds, dim=0)
+                    
+                    if self.use_vision_compression:
+                        # Compress the combined embeddings
+                        combined_embeds_compressed = self.vision_compressor(combined_embeds)
+                        # print("compress video")
+                        combined_embeds = combined_embeds_compressed
+                        
+                        # Compress image flags to match compressed embeddings
+                        image_flags = self._compress_image_flags(image_flags)
+                        image_flags2 = self._compress_image_flags(image_flags2)
+                        
+                        # Filter based on image_flags
+                        combined_embeds = combined_embeds[image_flags == 1]
+                        
+                        # Update num_tiles to reflect compressed structure
+                        if num_tiles is not None and isinstance(num_tiles, list):
+                            updated_num_tiles = []
+                            for batch_tiles in num_tiles:
+                                if batch_tiles is None:
+                                    updated_num_tiles.append(None)
+                                else:
+                                    # Treat all cases as video: compress tile count according to compression ratio
+                                    total_tiles = sum(batch_tiles) if isinstance(batch_tiles, list) else batch_tiles
+                                    if isinstance(total_tiles, int) and total_tiles > 0:
+                                        # Calculate compressed groups
+                                        compressed_groups = (total_tiles + self.compression_ratio - 1) // self.compression_ratio
+                                        updated_num_tiles.append([1] * compressed_groups)  # Each group becomes 1 tile
+                                    else:
+                                        updated_num_tiles.append([1])  # Fallback to single tile
+                            num_tiles = updated_num_tiles
+                    
+                    # Reshape for final output
+                    vit_embeds = combined_embeds.reshape(-1, C)
+                else:
+                    # Fallback case when no tiles
+                    vit_embeds = torch.empty(0, C, device=img_embeds2.device)
 
         input_embeds = input_embeds.reshape(B * N, C)
 

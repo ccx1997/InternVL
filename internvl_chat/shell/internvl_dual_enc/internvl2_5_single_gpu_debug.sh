@@ -5,16 +5,16 @@ BATCH_SIZE=${BATCH_SIZE:-2}
 PER_DEVICE_BATCH_SIZE=${PER_DEVICE_BATCH_SIZE:-1}
 GRADIENT_ACC=$((BATCH_SIZE / PER_DEVICE_BATCH_SIZE / GPUS))
 
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=1
 
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-export MASTER_PORT=34018
+export MASTER_PORT=34666
 export TF_CPP_MIN_LOG_LEVEL=3
 export LAUNCHER=pytorch
 export NCCL_DEBUG=WARN
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-pretrained_model_path='work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400'
+pretrained_model_path='work_dirs/internvl_chat_dual_compressor/internvl_chat_dual_compressor_8b_mix_s1/checkpoint-3400'
 vision_path2='/mnt/models/VGGT-1B/model.pt'
 OUTPUT_DIR='work_dirs/internvl_chat_dual_encoder/internvl2_5_8b_debug'
 
@@ -45,6 +45,7 @@ torchrun \
   --freeze_backbone True \
   --freeze_mlp2 False \
   --freeze_vision2 True \
+  --freeze_vision_compressor False \
   --vision_select_layer -1 \
   --dataloader_num_workers 0 \
   --bf16 True \
@@ -53,21 +54,21 @@ torchrun \
   --gradient_accumulation_steps ${GRADIENT_ACC} \
   --evaluation_strategy "no" \
   --save_strategy "steps" \
-  --save_steps 200 \
+  --save_steps 20 \
   --save_total_limit 1 \
   --learning_rate 4e-5 \
   --weight_decay 0.05 \
   --warmup_ratio 0.03 \
   --lr_scheduler_type "cosine" \
   --logging_steps 1 \
-  --max_num_frame 16 \
-  --max_seq_length 8192 \
+  --max_num_frame 48 \
+  --max_seq_length 7000 \
   --do_train True \
   --grad_checkpoint True \
   --group_by_length True \
   --dynamic_image_size False \
   --use_thumbnail True \
   --ps_version 'v2' \
-  --deepspeed "zero_stage3_config_34b.json" \
+  --deepspeed "zero_stage1_config.json" \
   --report_to "tensorboard" \
   2>&1 | tee -a "${OUTPUT_DIR}/training_log.txt"
