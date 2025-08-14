@@ -25,7 +25,7 @@ python batch_inference_demo.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # Commented out to avoid conflicts with other scripts
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
 from typing import List, Union, Dict, Any
@@ -388,60 +388,84 @@ def patch_model_batch_method(model):
             generation_config = GenerationConfig(**(generation_config or {}))
 
         batch_size = len(batch_pixel_values) if batch_pixel_values else input_ids.shape[0]
-        
+        use_compression = getattr(self, 'use_vision_compression', False) and hasattr(self, 'vision_compressor')
+
         # Process visual features for each sample
         batch_vit_all = []
         for i in range(batch_size):
             pixel_values = batch_pixel_values[i] if batch_pixel_values else None
             pixel_values2 = batch_pixel_values2[i] if batch_pixel_values2 else None
             attention_mask2 = batch_attention_mask2[i] if batch_attention_mask2 else None
-            
+
             if pixel_values is not None:
-                vit1 = self.extract_feature(pixel_values)
-                
+                vit1 = self.extract_feature(pixel_values)  # [N1, T1, C]
+                print(f"vit1: {vit1.shape}")
                 if pixel_values2 is not None:
                     # Fix dtype mismatch
                     model_dtype = next(self.vision_model2.parameters()).dtype
                     pixel_values2 = pixel_values2.to(model_dtype)
-                    
+
                     # Fix normalization buffers dtype
                     if hasattr(self.vision_model2, '_resnet_mean') and hasattr(self.vision_model2, '_resnet_std'):
                         if self.vision_model2._resnet_mean.dtype != model_dtype:
                             self.vision_model2._resnet_mean = self.vision_model2._resnet_mean.to(model_dtype)
                             self.vision_model2._resnet_std = self.vision_model2._resnet_std.to(model_dtype)
-                    
-                    vit2 = self.extract_feature2(pixel_values2, attention_mask2)
-                    vit_all = torch.cat([vit2.reshape(-1, vit2.size(-1)),
-                                       vit1.reshape(-1, vit1.size(-1))], dim=0)
+
+                    vit2 = self.extract_feature2(pixel_values2, attention_mask2)  # [N2, T2, C]
+                    print(f"vit2: {vit2.shape}")
+                    if use_compression:
+                        # Try joint compression when frame counts align; otherwise compress separately and concat
+                        if vit1.shape[0] == vit2.shape[0]:
+                            combined = torch.cat([vit2, vit1], dim=1)  # [N, T2+T1, C]
+                            comp = self.vision_compressor(combined)     # [G, Q, C]
+                            vit_all = comp.reshape(-1, comp.size(-1))   # [G*Q, C]
+                            print(f"vit_all: {vit_all.shape}")
+                        else:
+                            # comp_v2 = self.vision_compressor(vit2)      # [G2, Q, C]
+                            # comp_v1 = self.vision_compressor(vit1)      # [G1, Q, C]
+                            # vit_all = torch.cat([
+                            #     comp_v2.reshape(-1, comp_v2.size(-1)),
+                            #     comp_v1.reshape(-1, comp_v1.size(-1))
+                            # ], dim=0)
+                            raise ValueError("vit1.shape[0] != vit2.shape[0]")
+                    else:
+                        vit_all = torch.cat([
+                            vit2.reshape(-1, vit2.size(-1)),
+                            vit1.reshape(-1, vit1.size(-1))
+                        ], dim=0)
                 else:
-                    vit_all = vit1.reshape(-1, vit1.size(-1))
+                    if use_compression:
+                        comp_v1 = self.vision_compressor(vit1)  # [G1, Q, C]
+                        vit_all = comp_v1.reshape(-1, comp_v1.size(-1))
+                    else:
+                        vit_all = vit1.reshape(-1, vit1.size(-1))
             else:
                 vit_all = None
-            
+
             batch_vit_all.append(vit_all)
 
         # Process text embeddings
         txt = self.language_model.get_input_embeddings()(input_ids)
         B, N, C = txt.shape
-        
+
         # Replace image context tokens
         for i in range(B):
             if batch_vit_all[i] is not None:
                 vit_all = batch_vit_all[i]
                 ids_row = input_ids[i]
                 sel = (ids_row == self.img_context_token_id)
-                
+
                 if sel.sum() != vit_all.size(0):
                     print(f"Warning: Visual tokens ({vit_all.size(0)}) != selected positions ({sel.sum()}) for sample {i}")
                     # Handle mismatch by truncating or padding
                     if vit_all.size(0) > sel.sum():
                         vit_all = vit_all[:sel.sum()]
                     elif vit_all.size(0) < sel.sum():
-                        # Pad with zeros or repeat last token
+                        # Pad with repeat last token
                         pad_size = sel.sum() - vit_all.size(0)
                         pad_tokens = vit_all[-1:].repeat(pad_size, 1)
                         vit_all = torch.cat([vit_all, pad_tokens], dim=0)
-                
+
                 txt[i][sel] = vit_all.to(txt.device)
 
         # Set generation config defaults
@@ -478,46 +502,71 @@ def patch_model_batch_method(model):
                                    verbose=False):
         """Batch chat with dual encoder support"""
         batch_size = len(batch_questions)
-        
+        use_compression = getattr(self, 'use_vision_compression', False) and hasattr(self, 'vision_compressor')
+
         # Build prompts for each sample
         batch_prompts = []
         for i in range(batch_size):
             question = batch_questions[i]
             pixel_values = batch_pixel_values[i] if batch_pixel_values else None
             pixel_values2 = batch_pixel_values2[i] if batch_pixel_values2 else None
-            
+            attn2 = batch_attention_mask2[i] if batch_attention_mask2 is not None else None
+
             # Add <image> if not present
             if pixel_values is not None and '<image>' not in question:
                 question = '<image>\n' + question
-            
+
             # Get conversation template
             tmpl = get_conv_template(self.template)
             tmpl.system_message = self.system_message
             tmpl.append_message(tmpl.roles[0], question)
             tmpl.append_message(tmpl.roles[1], None)
             prompt = tmpl.get_prompt()
-            
+
             # Calculate tokens for image placeholders
-            n_img2 = 7 * 7 + 1  # Fixed in training
-            
+            n_img2 = 7 * 7 + 1  # Fixed in training for encoder2
+
+            total = 0
             if pixel_values is not None:
                 n_patch = pixel_values.shape[0]
                 n_patch2 = pixel_values2.shape[1] if pixel_values2 is not None else 0
-                
-                if pixel_values2 is not None and n_patch == n_patch2:
-                    total = (self.num_image_token + n_img2) * n_patch
-                else:
-                    total = self.num_image_token * n_patch + (n_img2 if pixel_values2 is not None else 0)
-                
 
-                print(f"[prompt {i}] tokens: enc1={self.num_image_token * n_patch}, "
-                          f"enc2={n_img2 * n_patch2}, total={total}")
-                
+                if use_compression:
+                    # Estimate number of compressed groups and total tokens
+                    comp_ratio = getattr(self, 'compression_ratio', 4)
+                    q_tokens = getattr(self.vision_compressor, 'num_query', 64)
+                    print(f"comp_ratio: {comp_ratio}, q_tokens: {q_tokens}")
+                    if pixel_values2 is not None and attn2 is not None:
+                        valid_frames = int(attn2.sum().item())
+                        groups = (valid_frames + comp_ratio - 1) // comp_ratio
+                        total = groups * q_tokens
+                        print(f"total: {total}")
+                    elif pixel_values2 is not None and n_patch == n_patch2:
+                        groups = (n_patch + comp_ratio - 1) // comp_ratio
+                        total = groups * q_tokens
+                    elif pixel_values2 is not None and n_patch != n_patch2:
+                        # Compress each stream separately and sum tokens
+                        groups1 = (n_patch + comp_ratio - 1) // comp_ratio
+                        groups2 = (n_patch2 + comp_ratio - 1) // comp_ratio
+                        total = (groups1 + groups2) * q_tokens
+                    else:
+                        groups = (n_patch + comp_ratio - 1) // comp_ratio
+                        total = groups * q_tokens
+
+                else:
+                    if pixel_values2 is not None and n_patch == n_patch2:
+                        total = (self.num_image_token + n_img2) * n_patch
+                    else:
+                        total = self.num_image_token * n_patch + (n_img2 if pixel_values2 is not None else 0)
+
+                if verbose:
+                    print(f"[prompt {i}] tokens: total={total} (compression={'on' if use_compression else 'off'})")
+
                 img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
                 prompt = prompt.replace('<image>', img_tokens, 1)
-            
+
             batch_prompts.append(prompt)
-        
+
         # Tokenize with left padding
         self.img_context_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
         
@@ -574,9 +623,10 @@ def patch_model_batch_method(model):
         
         return responses
 
-    # Bind methods to instance
+    # Bind methods
     model.batch_generate_with_dual_encoder = types.MethodType(batch_generate_with_dual_encoder, model)
-    model.batch_chat = types.MethodType(batch_chat_with_dual_encoder, model)
+    model.batch_chat_with_dual_encoder = types.MethodType(batch_chat_with_dual_encoder, model)
+
     return model
 
 
@@ -626,7 +676,7 @@ def batch_inference(model, tokenizer, media_batch, questions, max_tokens=512, ba
         
         # Inference
         try:
-            answers = model.batch_chat(
+            answers = model.batch_chat_with_dual_encoder(
                 tokenizer=tokenizer,
                 batch_pixel_values=batch_p1,
                 batch_pixel_values2=batch_p2,
@@ -682,7 +732,7 @@ def main():
     parser.add_argument('--question-file', type=str, help='File containing questions')
     
     # Processing options
-    parser.add_argument('--num-frames', type=int, default=32, help='Number of video frames')
+    parser.add_argument('--num-frames', type=int, default=128, help='Number of video frames')
     parser.add_argument('--max-tokens', type=int, default=512, help='Max generation tokens')
     parser.add_argument('--batch-size', type=int, default=4, help='Batch size for inference')
     

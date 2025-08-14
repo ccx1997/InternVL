@@ -2,11 +2,13 @@
 """
 Batch inference script for VSI-Bench dataset using InternVL Chat Dual Encoder
 """
+import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "6"
 import sys
 sys.path.append('/mnt/chensenda/codes/VLN/InternVL_video/internvl_chat')
 import argparse
 import json
-import os
+
 import sys
 import time
 import random
@@ -263,7 +265,7 @@ def process_batch_samples(model, tokenizer, samples: List[Dict[str, Any]],
 def main():
     parser = argparse.ArgumentParser(description='Batch inference for VSI-Bench dataset')
     parser.add_argument('--checkpoint', 
-                        default='/mnt/chensenda/checkpoints/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_4/checkpoint-9700',
+                        default='work_dirs/internvl_chat_dual_compressor/internvl_chat_dual_compressor_8b_mix_s3_2/checkpoint-6400',
                         help='Path to dual-encoder checkpoint')
     parser.add_argument('--dataset', 
                         default='/mnt/chengchangxu/data/VSI-Bench/vsi_bench_test.jsonl',
@@ -273,7 +275,7 @@ def main():
                         help='Root directory for video/image files')
     parser.add_argument('--random-sample', type=int, default=-1, help="Random sample the dataset to a certain number (-1 for all)")
     parser.add_argument('--output', 
-                        default='vsi_bench_predictions_avgpool_stage2_4_9700.json',
+                        default='vsi_bench_compressor_8b_mix_s3_2_6400.json',
                         help='Output file for predictions')
     parser.add_argument('--num-frames', type=int, default=32,
                         help='Number of video frames to sample')
@@ -321,12 +323,28 @@ def main():
     count = 0
     total_start_time = time.time()
     
-    for sample in tqdm(dataset_subset, desc="Processing samples"):
-        # if "object_rel_direction" not in sample['type'] and "object_counting" not in sample['type'] and "object_size_estimation" not in sample['type']:
+    
+    for i in tqdm(range(0, len(dataset_subset), args.batch_size), desc="Processing batches"):
+        batch_end = min(i + args.batch_size, len(dataset_subset))
+        batch_samples = dataset_subset[i:batch_end]
+        
+        # Filter samples by type if needed (uncomment to filter)
+        # filtered_samples = []
+        # for sample in batch_samples:
+        #     if "room_size_estimation" in sample['type'] or "obj_appearance_order" in sample['type']:
+        #         filtered_samples.append(sample)
+        # batch_samples = filtered_samples
+        
+        if not batch_samples:
+            continue
+            
+        count += len(batch_samples)
+        # if count > 2650:
         #     continue
-        count += 1
-        # if count > 10:
-        #     break
+        # Process batch
+        batch_results = process_batch_samples(model, tokenizer, batch_samples, 
+                                            args.data_root, args, gpu_monitor)
+        results.extend(batch_results)
         
         # Print progress
         if len(results) > 0 and len(results) % (args.batch_size * 10) == 0:

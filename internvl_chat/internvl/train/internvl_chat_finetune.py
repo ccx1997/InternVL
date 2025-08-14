@@ -668,8 +668,7 @@ class LazySupervisedDataset(Dataset):
                     max_num = max(1, self.max_dynamic_patch // num_images)
                 else:
                     max_num = self.max_dynamic_patch
-                processed_images = dynamic_preprocess(image, min_num=self.min_dynamic_patch,
-                                                    max_num=max_num,
+                processed_images = dynamic_preprocess(image, min_num=self.min_dynamic_patch, max_num=max_num,
                                                     image_size=self.image_size, use_thumbnail=self.use_thumbnail)
                 images.extend(processed_images)
                 num_tiles.append(len(processed_images))
@@ -1108,6 +1107,7 @@ class LazyVLNCEDataset(Dataset):
         self.max_num_frame = max_num_frame
         self.min_num_frame = min_num_frame
         self.sampling_method = sampling_method
+        self.max_observations = (self.max_num_frame - 1) // compression_ratio * compression_ratio + 1
 
         # hyperparameters for distributed training
         self.use_packed_ds = use_packed_ds
@@ -1315,13 +1315,13 @@ class LazyVLNCEDataset(Dataset):
         images2 = [] # for the new image encoder in the dual-vit system
 
         # 先把当前帧保留，然后前面的帧，如果超过上限，要均匀采样
-        if len(data_item['image']) > self.max_num_frame:
+        if len(data_item['image']) > self.max_observations:
             # import ipdb; ipdb.set_trace()
             result = []
             front = data_item['image'][:-1]
-            step = (len(front)) / (self.max_num_frame - 1)
+            step = (len(front)) / (self.max_observations - 1)
 
-            indices = [int(round(i * step)) for i in range(self.max_num_frame - 1)]
+            indices = [int(round(i * step)) for i in range(self.max_observations - 1)]
             result = [front[i] for i in indices] + [data_item['image'][-1]]
 
             data_item['image'] = result

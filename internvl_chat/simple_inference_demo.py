@@ -12,6 +12,7 @@ python demo_internvl_dual.py \
 
 import argparse
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 import random
 import warnings
 from typing import List, Union
