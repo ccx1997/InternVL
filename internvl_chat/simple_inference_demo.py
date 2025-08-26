@@ -12,7 +12,7 @@ python demo_internvl_dual.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"  # Commented out to avoid conflicts with other scripts
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
 from typing import List, Union
@@ -338,8 +338,8 @@ def patch_model_chat_method(model):
                         self.vision_model2._resnet_std = self.vision_model2._resnet_std.to(model_dtype)
                 
                 vit2 = self.extract_feature2(pixel_values2, attention_mask2)  # (1,T2,E)
-                vit_all = torch.cat([vit2.reshape(-1, vit2.size(-1)),
-                                     vit1.reshape(-1, vit1.size(-1))], dim=0)
+                vit_all = torch.cat([vit2,
+                                     vit1], dim=1).reshape(-1, vit1.size(-1))
             else:
                 vit_all = vit1.reshape(-1, vit1.size(-1))
         else:
@@ -353,6 +353,7 @@ def patch_model_chat_method(model):
         if vit_all is not None:
             ids_flat = input_ids.view(B * N)
             sel = (ids_flat == self.img_context_token_id)
+            print(f"sel.sum(): {sel.sum()}, vit_all.size(0): {vit_all.size(0)}")
             assert sel.sum() == vit_all.size(0), \
                 f"视觉 token ({vit_all.size(0)}) ≠ 选中位置 ({sel.sum()})"
             txt[sel] = vit_all.to(txt.device)
@@ -369,6 +370,10 @@ def patch_model_chat_method(model):
             generation_config.pad_token_id = getattr(self.language_model.config, 'pad_token_id', 
                                                    generation_config.eos_token_id)
         
+        # Set generation config to return cache information
+        generation_config.use_cache = True
+        generation_config.return_dict_in_generate = True
+        
         outs = self.language_model.generate(
             inputs_embeds=txt,
             attention_mask=attention_mask,
@@ -377,7 +382,14 @@ def patch_model_chat_method(model):
             use_cache=True,
             **gen_kwargs,
         )
-        return outs
+        
+        # Extract cache from the output
+        if hasattr(outs, 'past_key_values'):
+            cache = outs.past_key_values
+            sequences = outs.sequences
+            return sequences, cache
+        else:
+            return outs
 
     # ---------- chat ----------
     @torch.no_grad()
@@ -425,20 +437,51 @@ def patch_model_chat_method(model):
             # Fix: For video frames, each frame has both encoder tokens
             # Training uses: [self.num_image_token + self.num_img2_tokens] * num_patches
             # So each patch/frame gets: self.num_image_token + n_img2 tokens
-            print(f"n_patch: {n_patch}, n_patch2: {n_patch2}")
 
-            if  n_patch==n_patch2:
-                total = (self.num_image_token + n_img2) * n_patch
-                if verbose:
-                    print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
-                        f"enc2={n_img2 * n_patch}, total={total}")
+            # Count number of <image> tokens in the prompt
+            image_cnt = prompt.count('<image>')
+            tokens_per_images = []
+            if image_cnt > 0:
+                # Calculate tokens per image (assuming equal distribution)
+                if pixel_values2 is not None and n_patch == n_patch2:   #实际推理时会将更大的n_patch2变成n_patch，因为窗口注意力，窗口是2
+                    for i in range(n_patch):
+                        tokens_per_images.append(self.num_image_token + n_img2)
+                else:
+                    if n_patch > n_patch2:  
+                        for i in range(n_patch2):
+                            tokens_per_images.append(self.num_image_token + n_img2)
+                        for i in range(n_patch - n_patch2):
+                            tokens_per_images.append(self.num_image_token)
+                    else:
+                        for i in range(n_patch):
+                            tokens_per_images.append(self.num_image_token + n_img2)
+                        for i in range(n_patch2 - n_patch):
+                            tokens_per_images.append(n_img2)
+                    
+                total = sum(tokens_per_images)
+                print(f"[prompt] images: {image_cnt}, patches: {n_patch}, "
+                        f"tokens_per_image: {tokens_per_images}, total: {total}")
+
+                # Replace each <image> token sequentially
+                for tokens_per_image in tokens_per_images:
+                    img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * tokens_per_image + IMG_END_TOKEN
+                    prompt = prompt.replace('<image>', img_tokens, 1)
             else:
-                total = self.num_image_token*n_patch + n_img2
-                if verbose:
-                    print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
-                        f"enc2={n_img2}, total={total}")
-            img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
-            prompt = prompt.replace('<image>', img_tokens, 1)
+                # Fallback to original logic if no <image> tokens found
+                if pixel_values2 is not None and n_patch == n_patch2:
+                    total = (self.num_image_token + n_img2) * n_patch
+                else:
+                    total = self.num_image_token * n_patch + n_img2 * n_patch2
+                
+                print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
+                            f"enc2={n_img2 * n_patch2}, total={total}")
+                
+                img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
+                prompt = "<image>\n" + prompt
+                prompt = prompt.replace('<image>', img_tokens, 1)
+
+            print(f"n_patch: {n_patch}, n_patch2: {n_patch2}, total: {total}")
+
 
 
         model_inp = tokenizer(prompt, return_tensors='pt')
@@ -449,7 +492,8 @@ def patch_model_chat_method(model):
         gen_cfg = GenerationConfig(**generation_config)
         gen_cfg.eos_token_id = eos_id
 
-        outs = self.generate_with_dual_encoder(
+        # Call generate_with_dual_encoder and handle potential cache return
+        result = self.generate_with_dual_encoder(
             pixel_values=pixel_values,
             pixel_values2=pixel_values2,
             attention_mask2=attention_mask2,
@@ -457,6 +501,17 @@ def patch_model_chat_method(model):
             attention_mask=attention_mask,
             generation_config=gen_cfg,
         )
+        
+        # Handle return value - could be (sequences, cache) or just sequences
+        if isinstance(result, tuple) and len(result) == 2:
+            outs, cache = result
+            # You can access cache information here if needed
+            # cache contains past_key_values for all layers
+            print(f"Cache shape: {len(cache)} layers")
+            if cache and len(cache) > 0:
+                print(f"First layer cache shape: {cache[0][0].shape}")
+        else:
+            outs = result
 
         txt = tokenizer.batch_decode(outs, skip_special_tokens=True)[0]
         answer = txt.split(tmpl.sep.strip())[0].strip()
@@ -509,7 +564,7 @@ def simple_chat(model, tokenizer,
 
 def main():
     parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-1200',
+    parser.add_argument('--checkpoint', default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_4/checkpoint-11000',
                         help='Path to dual‑encoder checkpoint')
     parser.add_argument('--input', required=True,
                         help='Image / video path')

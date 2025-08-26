@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """
-InternVL‑Chat Dual Encoder Batch Inference Demo
-===============================================
-Usage examples:
---------
-# Single input with multiple questions
-python batch_inference_demo.py \
-    --input "/path/to/image_or_video.jpg" \
-    --questions "Describe what you see." "What is the main object?" \
-    --output results.json
+InternVL-Chat Interactive Inference with Multi-Input Support
+===========================================================
 
-# Multiple inputs with multiple questions  
-python batch_inference_demo.py \
-    --inputs "/path/to/image1.jpg" "/path/to/video1.mp4" \
-    --questions "Describe what you see." "What is happening?" \
-    --output results.json
+This script supports multiple input types:
+1. Single image: /path/to/image.jpg
+2. Single video: /path/to/video.mp4  
+3. Image list (video frames): ["frame1.jpg", "frame2.jpg", ...]
+4. Text file with image paths: /path/to/image_list.txt
 
-# From file lists
-python batch_inference_demo.py \
-    --input-file inputs.txt \
-    --question-file questions.txt \
-    --output results.json
+Usage:
+    python batch_inference_chat.py
+
+Example inputs:
+    - Single image: /mnt/data/image.jpg
+    - Image list: ["m0peVzh9rIs/imgs_3fps_360p/output_frame_0895.png", "m0peVzh9rIs/imgs_3fps_360p/output_frame_0901.png"]
+    - Text file: /path/to/frame_list.txt (containing one image path per line)
+
+Note: For image lists, if files are not found at the original path, 
+      the script will try with base path: /mnt/chengchangxu/data/roomtour3d/room_tour_video_3fps/
 """
 
 import argparse
@@ -143,34 +141,73 @@ def load_video_frames(video_path: str,
         return []
 
 
-def load_media_batch(input_paths: List[str], num_frames: int = 32) -> List[List[Image.Image]]:
-    """Load multiple media files and return list of image lists"""
+def load_image_list(image_paths: List[str], base_path: str = "/mnt/chengchangxu/data/roomtour3d/room_tour_video_3fps") -> List[Image.Image]:
+    """Load multiple images from a list of paths"""
+    imgs = []
+    for img_path in image_paths:
+        # Try original path first
+        full_path = img_path
+        if not os.path.exists(full_path):
+            # Try with base path
+            full_path = os.path.join(base_path, img_path)
+            if not os.path.exists(full_path):
+                print(f"Warning: Image file not found: {img_path} (tried both original and with base path)")
+                continue
+        try:
+            img = load_image(full_path)
+            imgs.append(img)
+        except Exception as e:
+            print(f"Warning: Image load failed: {full_path}, {e}")
+    return imgs
+
+
+def load_media_batch(input_paths: Union[List[str], List[List[str]]], num_frames: int = 32) -> List[List[Image.Image]]:
+    """Load multiple media files and return list of image lists
+    
+    Args:
+        input_paths: Can be:
+            - List[str]: List of single file paths (images/videos)
+            - List[List[str]]: List of image path lists (for video frames)
+        num_frames: Number of frames for video processing
+    """
     media_batch = []
     
-    for input_path in input_paths:
-        if not os.path.exists(input_path):
-            print(f"Warning: File not found: {input_path}")
-            media_batch.append([])
-            continue
-            
-        inp = input_path.lower()
-        if inp.endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
-            imgs = load_video_frames(input_path,
-                                   min_frames=num_frames,
-                                   max_frames=num_frames,
-                                   sampling='rand')
+    for input_item in input_paths:
+        # Check if input_item is a list of image paths (video frames)
+        if isinstance(input_item, list):
+            # Handle image list (video frames)
+            imgs = load_image_list(input_item)
             if not imgs:
-                print(f"Warning: Video load failed: {input_path}")
+                print(f"Warning: No valid images loaded from list: {input_item[:3]}...")
                 media_batch.append([])
             else:
                 media_batch.append(imgs)
         else:
-            try:
-                imgs = [load_image(input_path)]
-                media_batch.append(imgs)
-            except Exception as e:
-                print(f"Warning: Image load failed: {input_path}, {e}")
+            # Handle single file path
+            input_path = input_item
+            if not os.path.exists(input_path):
+                print(f"Warning: File not found: {input_path}")
                 media_batch.append([])
+                continue
+                
+            inp = input_path.lower()
+            if inp.endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
+                imgs = load_video_frames(input_path,
+                                       min_frames=num_frames,
+                                       max_frames=num_frames,
+                                       sampling='rand')
+                if not imgs:
+                    print(f"Warning: Video load failed: {input_path}")
+                    media_batch.append([])
+                else:
+                    media_batch.append(imgs)
+            else:
+                try:
+                    imgs = [load_image(input_path)]
+                    media_batch.append(imgs)
+                except Exception as e:
+                    print(f"Warning: Image load failed: {input_path}, {e}")
+                    media_batch.append([])
     
     return media_batch
 
@@ -411,6 +448,8 @@ def patch_model_batch_method(model):
                             self.vision_model2._resnet_std = self.vision_model2._resnet_std.to(model_dtype)
                     
                     vit2 = self.extract_feature2(pixel_values2, attention_mask2)
+                    # vit_all = torch.cat([vit2.reshape(-1, vit2.size(-1)),
+                    #                    vit1.reshape(-1, vit1.size(-1))], dim=0)
                     vit_all = torch.cat([vit2,
                                      vit1], dim=1).reshape(-1, vit1.size(-1))
                 else:
@@ -504,17 +543,39 @@ def patch_model_batch_method(model):
                 n_patch = pixel_values.shape[0]
                 n_patch2 = pixel_values2.shape[1] if pixel_values2 is not None else 0
                 
-                if pixel_values2 is not None and n_patch == n_patch2:
-                    total = (self.num_image_token + n_img2) * n_patch
+                # Count number of <image> tokens in the prompt
+                image_cnt = prompt.count('<image>')
+                
+                if image_cnt > 0:
+                    # Calculate tokens per image (assuming equal distribution)
+                    if pixel_values2 is not None and n_patch == n_patch2:
+                        tokens_per_image = (self.num_image_token + n_img2) * (n_patch // image_cnt)
+                    else:
+                        tokens_per_image = (self.num_image_token + n_img2) * (n_patch // image_cnt)
+                    
+                    print(f"[prompt {i}] images: {image_cnt}, patches: {n_patch}, "
+                          f"tokens_per_image: {tokens_per_image}")
+                    if n_patch!=image_cnt:
+                        print("n_patch != image_cnt")
+                        print(f"[prompt {i}] n_patch: {n_patch}, image_cnt: {image_cnt}")
+                    else:
+                        print("n_patch == image_cnt")
+                    # Replace each <image> token sequentially
+                    for img_idx in range(image_cnt):
+                        img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * tokens_per_image + IMG_END_TOKEN
+                        prompt = prompt.replace('<image>', img_tokens, 1)
                 else:
-                    total = self.num_image_token * n_patch + (n_img2 if pixel_values2 is not None else 0)
-                
-
-                print(f"[prompt {i}] tokens: enc1={self.num_image_token * n_patch}, "
-                          f"enc2={n_img2 * n_patch2}, total={total}")
-                
-                img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
-                prompt = prompt.replace('<image>', img_tokens, 1)
+                    # Fallback to original logic if no <image> tokens found
+                    if pixel_values2 is not None and n_patch == n_patch2:
+                        total = (self.num_image_token + n_img2) * n_patch
+                    else:
+                        total = (self.num_image_token + n_img2) * n_patch
+                    
+                    print(f"[prompt {i}] tokens: enc1={self.num_image_token * n_patch}, "
+                              f"enc2={n_img2 * n_patch2}, total={total}")
+                    
+                    img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
+                    prompt = prompt.replace('<image>', img_tokens, 1)
             
             batch_prompts.append(prompt)
         
@@ -666,96 +727,187 @@ def parse_file_list(file_path: str) -> List[str]:
     return lines
 
 
-def main():
-    parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Batch Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-9200',
-                        help='Path to dual‑encoder checkpoint')
+def parse_input_string(input_str: str):
+    """Parse input string to determine if it's a single path or image list
     
-    # Input options
-    parser.add_argument('--input', type=str, help='Single input path')
-    parser.add_argument('--inputs', nargs='+', help='Multiple input paths')
-    parser.add_argument('--input-file', type=str, help='File containing input paths')
+    Returns:
+        - str: Single file path
+        - List[str]: List of image paths
+    """
+    input_str = input_str.strip()
     
-    # Question options
-    parser.add_argument('--question', type=str, help='Single question')
-    parser.add_argument('--questions', nargs='+', help='Multiple questions')
-    parser.add_argument('--question-file', type=str, help='File containing questions')
+    # Check if it's a list format
+    if input_str.startswith('[') and input_str.endswith(']'):
+        try:
+            import ast
+            parsed = ast.literal_eval(input_str)
+            if isinstance(parsed, list):
+                return parsed
+        except:
+            pass
     
-    # Processing options
-    parser.add_argument('--num-frames', type=int, default=32, help='Number of video frames')
-    parser.add_argument('--max-tokens', type=int, default=512, help='Max generation tokens')
-    parser.add_argument('--batch-size', type=int, default=4, help='Batch size for inference')
+    # Check if it's a file containing list of paths
+    if input_str.endswith('.txt') and os.path.exists(input_str):
+        try:
+            paths = parse_file_list(input_str)
+            return paths
+        except:
+            pass
     
-    # Output options
-    parser.add_argument('--output', type=str, help='Output JSON file')
-    parser.add_argument('--verbose', action='store_true', help='Verbose output')
-    
-    args = parser.parse_args()
+    # Default to single path
+    return input_str
 
-    # Parse inputs
-    if args.input:
-        input_paths = [args.input]
-    elif args.inputs:
-        input_paths = args.inputs
-    elif args.input_file:
-        input_paths = parse_file_list(args.input_file)
-    else:
-        raise ValueError("Must provide --input, --inputs, or --input-file")
-    input_paths = ["/mnt/chensenda/codes/VLN/ScanQA/Scannet/mp4/scene0169_00.mp4","/mnt/chensenda/codes/VLN/ScanQA/Scannet/mp4/scene0496_00.mp4","/mnt/chensenda/codes/VLN/ScanQA/Scannet/mp4/scene0169_00.mp4","/mnt/chensenda/codes/VLN/ScanQA/Scannet/mp4/scene0496_00.mp4"]
-    # Parse questions
-    if args.question:
-        questions = [args.question]
-    elif args.questions:
-        questions = args.questions
-    elif args.question_file:
-        questions = parse_file_list(args.question_file)
-    else:
-        raise ValueError("Must provide --question, --questions, or --question-file")
-    questions = ["I am facing a cabinet, while there are several chairs in a row on my right and another one behind me. What is on the 5 o'clock of the trash can that is far away on my right? Quick answer.","I am sitting on a chair facing the table with the blackboard behind me and a chair on my left within reach. Which direction should I go if I want to exit the room? Answer in few words.","I am facing a cabinet, while there are several chairs in a row on my right and another one behind me. What is on the 5 o'clock of the trash can that is far away on my right? Quick answer.","I am sitting on a chair facing the table with the blackboard behind me and a chair on my left within reach. Which direction should I go if I want to exit the room? Answer in few words.",]
-    # Expand inputs/questions to match
-    if len(input_paths) == 1 and len(questions) > 1:
-        # Single input, multiple questions
-        input_paths = input_paths * len(questions)
-    elif len(questions) == 1 and len(input_paths) > 1:
-        # Multiple inputs, single question
-        questions = questions * len(input_paths)
-    elif len(input_paths) != len(questions):
-        raise ValueError(f"Number of inputs ({len(input_paths)}) must match number of questions ({len(questions)})")
 
-    print(f"Processing {len(input_paths)} input-question pairs")
-
-    # Load model
-    print("Loading model...")
-    model, tokenizer = load_model_and_tokenizer(args.checkpoint)
-    model = patch_model_batch_method(model)
-
+def single_inference(model, tokenizer, input_data, question, num_frames=32, max_tokens=512):
+    """Perform single inference for one input-question pair
+    
+    Args:
+        input_data: Can be:
+            - str: Single file path (image/video)
+            - List[str]: List of image paths (video frames)
+    """
     # Load media
-    print("Loading media files...")
-    media_batch = load_media_batch(input_paths, args.num_frames)
-
-    # Run batch inference
-    print("Running batch inference...")
-    results = batch_inference(model, tokenizer, media_batch, questions, 
-                            args.max_tokens, args.batch_size)
-
-    # Add input paths to results
-    for i, result in enumerate(results):
-        result['input_path'] = input_paths[i]
-
-    # Output results
-    if args.output:
-        with open(args.output, 'w') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"Results saved to {args.output}")
+    media_batch = load_media_batch([input_data], num_frames)
+    
+    # Preprocess media
+    batch_pv1, batch_pv2 = preprocess_media_batch(
+        media_batch,
+        image_size=model.config.force_image_size or model.config.vision_config.image_size,
+        dynamic_size=True,
+        use_thumbnail=model.config.use_thumbnail,
+        max_patches=1  # For video, set to 1
+    )
+    
+    # Create attention mask
+    pv2 = batch_pv2[0]
+    if pv2 is not None:
+        attn2 = (pv2.abs().sum(dim=(2, 3, 4)) > 0)
     else:
-        print("\n" + "="*80)
-        print("BATCH INFERENCE RESULTS")
-        print("="*80)
-        for result in results:
-            print(f"\nInput: {result['input_path']}")
-            print(f"Question: {result['question']}")
-            print(f"Answer: {result['answer']}")
-            print("-" * 40)
+        attn2 = None
+    
+    # Generation config
+    gen_cfg = {
+        'max_new_tokens': max_tokens,
+        'do_sample': False,
+        'num_beams': 1,
+        'pad_token_id': tokenizer.eos_token_id,
+        'bos_token_id': getattr(tokenizer, 'bos_token_id', tokenizer.eos_token_id),
+        'eos_token_id': tokenizer.eos_token_id,
+    }
+    
+    # Inference
+    try:
+        answers = model.batch_chat(
+            tokenizer=tokenizer,
+            batch_pixel_values=batch_pv1,
+            batch_pixel_values2=batch_pv2,
+            batch_attention_mask2=[attn2],
+            batch_questions=[question],
+            generation_config=gen_cfg,
+            verbose=False
+        )
+        return answers[0]
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def main():
+    # Fixed checkpoint path
+    checkpoint = '/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-9200'
+    checkpoint = '/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_4/checkpoint-11000'
+    # checkpoint = '/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_roomtour'
+    
+    
+    # Load model once at startup
+    print("Loading model...")
+    model, tokenizer = load_model_and_tokenizer(checkpoint)
+    model = patch_model_batch_method(model)
+    print("Model loaded successfully!")
+    
+    # Interactive loop
+    print("\n" + "="*80)
+    print("InternVL-Chat Interactive Inference")
+    print("="*80)
+    print("Enter 'quit' or 'exit' to stop")
+    print("Usage: Provide input and question for each inference")
+    print("Input types:")
+    print("  1. Single image/video: /path/to/file.jpg")
+    print("  2. Image list (frames): [\"path1.jpg\", \"path2.jpg\", ...]")
+    print("  3. Text file with paths: /path/to/image_list.txt")
+    print("\nNote: For image lists, if files are not found, will try with base path:")
+    print("      /mnt/chengchangxu/data/roomtour3d/room_tour_video_3fps/")
+    print("-" * 80)
+    
+    while True:
+        try:
+            # Get input
+            input_str = input("\nEnter input (path, list, or file): ").strip()
+            if input_str.lower() in ['quit', 'exit']:
+                break
+                
+            if not input_str:
+                print("Please provide a valid input")
+                continue
+            
+            # Parse input using helper function
+            input_data = parse_input_string(input_str)
+            
+            # Validate input
+            if isinstance(input_data, list):
+                # For image lists, we'll validate during loading (with base path fallback)
+                print(f"Will attempt to load {len(input_data)} image paths")
+            else:
+                # Single file path
+                if not os.path.exists(input_data):
+                    print(f"File not found: {input_data}")
+                    continue
+            
+            # Get question
+            question = input("Enter your question: ").strip()
+            if not question:
+                print("Please provide a question")
+                continue
+            
+            # Get optional parameters
+            try:
+                num_frames = input("Number of frames (default 32): ").strip()
+                num_frames = int(num_frames) if num_frames else 32
+            except ValueError:
+                num_frames = 32
+                
+            try:
+                max_tokens = input("Max tokens (default 512): ").strip()
+                max_tokens = int(max_tokens) if max_tokens else 512
+            except ValueError:
+                max_tokens = 512
+            
+            # Run inference
+            print("\nProcessing...")
+            answer = single_inference(model, tokenizer, input_data, question, num_frames, max_tokens)
+            
+            # Display result
+            print("\n" + "="*60)
+            print("RESULT")
+            print("="*60)
+            if isinstance(input_data, list):
+                print(f"Input: Image list with {len(input_data)} frames")
+                print(f"Image list: {input_data}")
+                abs_path = [os.path.join("/mnt/chengchangxu/data/roomtour3d/room_tour_video_3fps", p) for p in input_data]
+                print(f"Absolute paths: {abs_path}")
+            else:
+                print(f"Input: {input_data}")
+            print(f"Question: {question}")
+            print(f"Answer: {answer}")
+            print("="*60)
+            
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            break
+        except Exception as e:
+            print(f"Error: {e}")
+            continue
+    
+    print("Goodbye!")
 
 
 if __name__ == '__main__':

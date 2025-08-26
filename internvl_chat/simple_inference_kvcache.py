@@ -12,7 +12,7 @@ python demo_internvl_dual.py \
 
 import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
 from typing import List, Union
@@ -24,7 +24,6 @@ import torch
 from decord import VideoReader
 from PIL import Image
 from transformers import AutoTokenizer, GenerationConfig
-import gradio as gr
 
 from internvl.model import InternVLChatConfig, InternVLChatModel
 from internvl.train.dataset import build_transform, dynamic_preprocess
@@ -43,10 +42,6 @@ BOX_START_TOKEN = '<box>'
 BOX_END_TOKEN = '</box>'
 
 warnings.filterwarnings('ignore')
-
-# Global variables for model and tokenizer
-global_model = None
-global_tokenizer = None
 
 
 # ------------------------------------------------------------------
@@ -320,6 +315,7 @@ def patch_model_chat_method(model):
                                    visual_features=None,
                                    generation_config=None,
                                    output_hidden_states=None,
+                                   past_key_values=None,
                                    **gen_kwargs):
         """双编码器推理"""
         if isinstance(generation_config, dict) or generation_config is None:
@@ -342,7 +338,7 @@ def patch_model_chat_method(model):
                         self.vision_model2._resnet_mean = self.vision_model2._resnet_mean.to(model_dtype)
                         self.vision_model2._resnet_std = self.vision_model2._resnet_std.to(model_dtype)
                 
-                vit2 = self.extract_feature2(pixel_values2, attention_mask2)  # (1,T2,E)
+                vit2 = self.extract_feature2(pixel_values2, attention_mask2)  # (1,50,E)
                 vit_all = torch.cat([vit2,
                                      vit1], dim=1).reshape(-1, vit1.size(-1))
             else:
@@ -358,6 +354,7 @@ def patch_model_chat_method(model):
         if vit_all is not None:
             ids_flat = input_ids.view(B * N)
             sel = (ids_flat == self.img_context_token_id)
+            print(f"sel.sum(): {sel.sum()}, vit_all.size(0): {vit_all.size(0)}")
             assert sel.sum() == vit_all.size(0), \
                 f"视觉 token ({vit_all.size(0)}) ≠ 选中位置 ({sel.sum()})"
             txt[sel] = vit_all.to(txt.device)
@@ -374,15 +371,28 @@ def patch_model_chat_method(model):
             generation_config.pad_token_id = getattr(self.language_model.config, 'pad_token_id', 
                                                    generation_config.eos_token_id)
         
+        # Set generation config to return cache information
+        generation_config.use_cache = True
+        generation_config.return_dict_in_generate = True
+        
         outs = self.language_model.generate(
             inputs_embeds=txt,
+            input_ids=input_ids,
             attention_mask=attention_mask,
             generation_config=generation_config,
             output_hidden_states=output_hidden_states,
             use_cache=True,
+            past_key_values=past_key_values,
             **gen_kwargs,
         )
-        return outs
+        
+        # Extract cache from the output
+        if hasattr(outs, 'past_key_values'):
+            cache = outs.past_key_values
+            sequences = outs.sequences
+            return sequences, cache
+        else:
+            return outs
 
     # ---------- chat ----------
     @torch.no_grad()
@@ -424,25 +434,50 @@ def patch_model_chat_method(model):
         prompt = tmpl.get_prompt()
 
         # —— 插入 <image> token 总数 —— #
-        n_img2 = 7 * 7 + 1    # 训练时写死 170
+        n_img2 =7 * 7 + 1    # 训练时写死 170
+        # self.num_image_token = int(self.num_image_token/4)
         for n_patch, n_patch2 in zip(num_patches_list, num_patches_list_2):
             # Fix: For video frames, each frame has both encoder tokens
             # Training uses: [self.num_image_token + self.num_img2_tokens] * num_patches
             # So each patch/frame gets: self.num_image_token + n_img2 tokens
-            print(f"n_patch: {n_patch}, n_patch2: {n_patch2}")
 
-            if  n_patch==n_patch2:
-                total = (self.num_image_token + n_img2) * n_patch
-                if verbose:
-                    print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
-                        f"enc2={n_img2 * n_patch}, total={total}")
+            # Count number of <image> tokens in the prompt
+            image_cnt = prompt.count('<image>')
+            tokens_per_images = []
+            if image_cnt > 0:
+                # Calculate tokens per image (assuming equal distribution)
+                if pixel_values2 is not None and n_patch == n_patch2:   #实际推理时会将更大的n_patch2变成n_patch，因为窗口注意力，窗口是2
+                    for i in range(n_patch):
+                        tokens_per_images.append(self.num_image_token + n_img2)
+                else:
+                    for i in range(n_patch):
+                        tokens_per_images.append(self.num_image_token + n_img2)
+                    
+                total = sum(tokens_per_images)
+                print(f"[prompt] images: {image_cnt}, patches: {n_patch}, "
+                        f"tokens_per_image: {tokens_per_images}, total: {total}")
+
+                # Replace each <image> token sequentially
+                for tokens_per_image in tokens_per_images:
+                    img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * tokens_per_image + IMG_END_TOKEN
+                    prompt = prompt.replace('<image>', img_tokens, 1)
             else:
-                total = self.num_image_token*n_patch + n_img2
-                if verbose:
-                    print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
-                        f"enc2={n_img2}, total={total}")
-            img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
-            prompt = prompt.replace('<image>', img_tokens, 1)
+                print("进入image_cnt > 0 else")
+                # Fallback to original logic if no <image> tokens found
+                if pixel_values2 is not None and n_patch == n_patch2:
+                    total = (self.num_image_token + n_img2) * n_patch
+                else:
+                    total = (self.num_image_token + n_img2) * n_patch
+                
+                print(f"[prompt] tokens: enc1={self.num_image_token * n_patch}, "
+                            f"enc2={n_img2 * n_patch2}, total={total}")
+                
+                img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * total + IMG_END_TOKEN
+                prompt = "<image>\n" + prompt
+                prompt = prompt.replace('<image>', img_tokens, 1)
+
+            print(f"n_patch: {n_patch}, n_patch2: {n_patch2}, total: {total}")
+
 
 
         model_inp = tokenizer(prompt, return_tensors='pt')
@@ -453,7 +488,8 @@ def patch_model_chat_method(model):
         gen_cfg = GenerationConfig(**generation_config)
         gen_cfg.eos_token_id = eos_id
 
-        outs = self.generate_with_dual_encoder(
+        # Call generate_with_dual_encoder and handle potential cache return
+        result = self.generate_with_dual_encoder(
             pixel_values=pixel_values,
             pixel_values2=pixel_values2,
             attention_mask2=attention_mask2,
@@ -461,6 +497,17 @@ def patch_model_chat_method(model):
             attention_mask=attention_mask,
             generation_config=gen_cfg,
         )
+        
+        # Handle return value - could be (sequences, cache) or just sequences
+        if isinstance(result, tuple) and len(result) == 2:
+            outs, cache = result
+            # You can access cache information here if needed
+            # cache contains past_key_values for all layers
+            print(f"Cache shape: {len(cache)} layers")
+            if cache and len(cache) > 0:
+                print(f"First layer cache shape: {cache[0][0].shape}")
+        else:
+            outs = result
 
         txt = tokenizer.batch_decode(outs, skip_special_tokens=True)[0]
         answer = txt.split(tmpl.sep.strip())[0].strip()
@@ -474,9 +521,314 @@ def patch_model_chat_method(model):
                 print("[Chat] bot :", answer)
             return answer
 
+    # ---------- multi-turn streaming chat with KV cache ----------
+    def multi_turn_streaming_chat(self, tokenizer, human_instruction, max_tokens=512):
+        """Multi-turn streaming chat with KV cache management"""
+        
+        # Initialize conversation state
+        self.conversation_state = {
+            'human_instruction': human_instruction,
+            'base_cache': None,  # Cache for human instruction + images
+            'base_input_ids': None,  # Input IDs for human instruction + images
+            'base_attention_mask': None,  # Attention mask for human instruction + images
+            'image_paths': [],  # List of image paths
+            'pixel_values_list': [],  # List of pixel values for encoder 1
+            'pixel_values2_list': [],  # List of pixel values for encoder 2
+            'turn_count': 0
+        }
+        
+        print(f"[Multi-turn Chat] Initialized with instruction: {human_instruction}")
+        return "Multi-turn chat initialized. Please input image paths."
+    
+    def add_image_and_generate(self, tokenizer, image_path, max_tokens=512):
+        """Add new image and generate response using cached context"""
+        
+        if not hasattr(self, 'conversation_state'):
+            return "Error: Please initialize conversation first with human instruction."
+        
+        state = self.conversation_state
+        state['turn_count'] += 1
+        
+        print(f"[Turn {state['turn_count']}] Processing image: {image_path}")
+        
+        # Load and preprocess the new image
+        try:
+            img = load_image(image_path)
+            imgs = [img]
+            
+            # Preprocess images
+            pv1, pv2 = preprocess_images(imgs,
+                                       image_size=self.config.force_image_size
+                                       or self.config.vision_config.image_size,
+                                       dynamic_size=True,
+                                       use_thumbnail=self.config.use_thumbnail,
+                                       max_patches=1)
+            
+            # Store image information
+            state['image_paths'].append(image_path)
+            state['pixel_values_list'].append(pv1)
+            state['pixel_values2_list'].append(pv2)
+            
+        except Exception as e:
+            return f"Error loading image {image_path}: {str(e)}"
+        
+        # For the first turn, process everything from scratch
+        if state['turn_count'] == 1:
+            return self._process_first_turn(state, tokenizer, max_tokens)
+        else:
+            return self._process_subsequent_turn(state, tokenizer, max_tokens)
+    
+    def _process_first_turn(self, state, tokenizer, max_tokens):
+        """Process the first turn with full context"""
+        # Build the full conversation context
+        full_question = self._build_multi_turn_prompt(state)
+        
+        # Prepare conversation template
+        tmpl = get_conv_template(self.template)
+        tmpl.system_message = self.system_message
+        eos_id = tokenizer.convert_tokens_to_ids(tmpl.sep.strip())
+        
+        # Build prompt
+        tmpl.append_message(tmpl.roles[0], full_question)
+        tmpl.append_message(tmpl.roles[1], None)
+        prompt = tmpl.get_prompt()
+        
+        # Combine all visual features
+        all_pv1 = torch.cat(state['pixel_values_list'], dim=0)
+        all_pv2 = torch.cat(state['pixel_values2_list'], dim=0)
+        
+        # Process prompt with image tokens
+        prompt = self._insert_image_tokens(prompt, all_pv1, all_pv2, tokenizer)
+        
+        # Tokenize
+        model_inp = tokenizer(prompt, return_tensors='pt')
+        device = next(self.parameters()).device
+        input_ids = model_inp['input_ids'].to(device)
+        attention_mask = model_inp['attention_mask'].to(device)
+        
+        # Prepare attention mask for encoder 2
+        attn2 = (all_pv2.abs().sum(dim=(2, 3, 4)) > 0) if all_pv2 is not None else None
+        
+        # Generation config
+        gen_cfg = GenerationConfig(
+            max_new_tokens=max_tokens,
+            do_sample=False,
+            num_beams=1,
+            pad_token_id=tokenizer.eos_token_id,
+            bos_token_id=getattr(tokenizer, 'bos_token_id', tokenizer.eos_token_id),
+            eos_token_id=eos_id,
+            use_cache=True,
+            return_dict_in_generate=True
+        )
+        
+        result = self.generate_with_dual_encoder(
+            pixel_values=all_pv1,
+            pixel_values2=all_pv2,
+            attention_mask2=attn2,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=state['base_cache'],
+            generation_config=gen_cfg,
+        )
+        
+        # Handle result and cache
+        if isinstance(result, tuple) and len(result) == 2:
+            outs, full_cache = result
+        else:
+            outs = result
+            full_cache = None
+        
+        # Decode response
+        txt = tokenizer.batch_decode(outs, skip_special_tokens=True)[0]
+        answer = txt.split(tmpl.sep.strip())[0].strip()
+        
+        # Extract and save base cache (instruction + images only, without model response)
+        if full_cache is not None:
+            # Calculate the length of input (instruction + images) vs full sequence
+            origin_input_length = input_ids.shape[1]
+            input_length = input_ids.shape[1]-6
+            response_length = outs.shape[1]-origin_input_length
+            
+            # Trim cache to remove response tokens, keep only input context
+            base_cache = self._trim_cache_to_length(full_cache, input_length)
+            
+            # Update conversation state
+            state['base_cache'] = base_cache
+            state['base_input_ids'] = input_ids[:,:input_length]
+            state['base_attention_mask'] = attention_mask[:,:input_length]
+            
+            print(f"[Cache] input_ids.shape[1]:{input_ids.shape[1]},full_cache[0][0].shape:{full_cache[0][0].shape}, Saved base cache with {input_length} tokens, removed {response_length} response tokens")
+        
+        print(f"[Turn {state['turn_count']}] Generated response: {answer}")
+        return answer
+    
+    def _process_subsequent_turn(self, state, tokenizer, max_tokens):
+        """Process subsequent turns using incremental context"""
+        # For simplicity, we'll rebuild the full context but note that we could optimize this
+        # In a production system, you'd want to incrementally update the cache
+        print(f"[Cache] Processing turn {state['turn_count']} - rebuilding context with cache optimization")
+        
+        # Build the full conversation context with all images
+        full_question = self._build_multi_turn_prompt(state)
+        
+        # Prepare conversation template
+        tmpl = get_conv_template(self.template)
+        tmpl.system_message = self.system_message
+        eos_id = tokenizer.convert_tokens_to_ids(tmpl.sep.strip())
+        
+        # Build prompt
+        tmpl.append_message(tmpl.roles[0], full_question)
+        tmpl.append_message(tmpl.roles[1], None)
+        prompt = tmpl.get_prompt()
+        
+        # Combine all visual features
+        all_pv1 = torch.cat(state['pixel_values_list'], dim=0)
+        all_pv2 = torch.cat(state['pixel_values2_list'], dim=0)
+        
+        # Process prompt with image tokens
+        prompt = self._insert_image_tokens(prompt, all_pv1, all_pv2, tokenizer)
+        
+        # Tokenize
+        model_inp = tokenizer(prompt, return_tensors='pt')
+        device = next(self.parameters()).device
+        input_ids = model_inp['input_ids'].to(device)
+        attention_mask = model_inp['attention_mask'].to(device)
+        
+        # Prepare attention mask for encoder 2
+        attn2 = (all_pv2.abs().sum(dim=(2, 3, 4)) > 0) if all_pv2 is not None else None
+        
+        # Generation config
+        gen_cfg = GenerationConfig(
+            max_new_tokens=max_tokens,
+            do_sample=False,
+            num_beams=1,
+            pad_token_id=tokenizer.eos_token_id,
+            bos_token_id=getattr(tokenizer, 'bos_token_id', tokenizer.eos_token_id),
+            eos_token_id=eos_id,
+            use_cache=True,
+            return_dict_in_generate=True
+        )
+        
+        # Note: For true cache reuse, we'd need to implement more sophisticated logic
+        # This current implementation rebuilds everything but maintains the infrastructure
+        # for future optimization
+        result = self.generate_with_dual_encoder(
+            pixel_values=all_pv1,
+            pixel_values2=all_pv2,
+            attention_mask2=attn2,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            generation_config=gen_cfg,
+            past_key_values=state['base_cache']
+        )
+        
+        # Handle result and cache
+        if isinstance(result, tuple) and len(result) == 2:
+            outs, full_cache = result
+        else:
+            outs = result
+            full_cache = None
+        
+        # Decode response
+        txt = tokenizer.batch_decode(outs, skip_special_tokens=True)[0]
+        answer = txt.split(tmpl.sep.strip())[0].strip()
+        
+        # Update cache for next turn
+        if full_cache is not None:
+            origin_input_length = input_ids.shape[1]
+            input_length = input_ids.shape[1]-6
+            response_length = outs.shape[1]-origin_input_length
+            
+            # Trim cache to remove response tokens, keep only input context
+            base_cache = self._trim_cache_to_length(full_cache, input_length)
+            
+            # Update conversation state
+            state['base_cache'] = base_cache
+            state['base_input_ids'] = input_ids[:,:input_length]
+            state['base_attention_mask'] = attention_mask[:,:input_length]
+            
+            print(f"[Cache] Updated base cache with {input_length} tokens, removed {response_length} response tokens, 6 system tokens")
+        
+        print(f"[Turn {state['turn_count']}] Generated response: {answer}")
+        return answer
+    
+    def _build_multi_turn_prompt(self, state):
+        """Build prompt with all images in the conversation"""
+        human_instruction = state['human_instruction']
+        image_paths = state['image_paths']
+        
+        # Create image placeholders
+        image_parts = []
+        for i, path in enumerate(image_paths):
+            image_parts.append(f"Frame-{i+1}: <image>\n")
+        
+        if image_parts:
+            full_question = human_instruction + "\n\n" + "\n".join(image_parts)
+        else:
+            full_question = human_instruction
+            
+        return full_question
+    
+    def _insert_image_tokens(self, prompt, pv1, pv2, tokenizer):
+        """Insert proper image tokens into prompt"""
+        if pv1 is None:
+            return prompt
+            
+        # Calculate tokens per image
+        n_img2 = 7 * 7 + 1  # 50 tokens for encoder 2
+        n_patch = pv1.shape[0] if pv1 is not None else 0
+        n_patch2 = pv2.shape[1] if pv2 is not None else 0
+        
+        # Count <image> tokens in prompt
+        image_count = prompt.count('<image>')
+        
+        if image_count > 0:
+            # Replace each <image> with proper tokens
+            for i in range(image_count):
+                    # Both encoders have data for this image
+                tokens_per_image = self.num_image_token + n_img2
+                
+                img_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * tokens_per_image + IMG_END_TOKEN
+                prompt = prompt.replace('<image>', img_tokens, 1)
+        
+        return prompt
+    
+    def _trim_cache_to_length(self, cache, target_length):
+        """Trim KV cache to specified sequence length"""
+        if cache is None:
+            return None
+            
+        trimmed_cache = []
+        for layer_cache in cache:
+            if isinstance(layer_cache, tuple) and len(layer_cache) == 2:
+                key_cache, value_cache = layer_cache
+                # Trim to target length: (batch, num_heads, seq_len, head_dim)
+                trimmed_key = key_cache[:, :, :target_length, :]
+                trimmed_value = value_cache[:, :, :target_length, :]
+                trimmed_cache.append((trimmed_key, trimmed_value))
+            else:
+                # Handle other cache formats if needed
+                trimmed_cache.append(layer_cache)
+        
+        return tuple(trimmed_cache)
+    
+    def reset_conversation(self):
+        """Reset conversation state"""
+        if hasattr(self, 'conversation_state'):
+            delattr(self, 'conversation_state')
+        print("[Multi-turn Chat] Conversation reset.")
+
     # —— 绑定到实例 —— #
     model.generate_with_dual_encoder = types.MethodType(generate_with_dual_encoder, model)
     model.chat = types.MethodType(chat_with_dual_encoder, model)
+    model.multi_turn_streaming_chat = types.MethodType(multi_turn_streaming_chat, model)
+    model.add_image_and_generate = types.MethodType(add_image_and_generate, model)
+    model._process_first_turn = types.MethodType(_process_first_turn, model)
+    model._process_subsequent_turn = types.MethodType(_process_subsequent_turn, model)
+    model._build_multi_turn_prompt = types.MethodType(_build_multi_turn_prompt, model)
+    model._insert_image_tokens = types.MethodType(_insert_image_tokens, model)
+    model._trim_cache_to_length = types.MethodType(_trim_cache_to_length, model)
+    model.reset_conversation = types.MethodType(reset_conversation, model)
     return model
 
 
@@ -511,166 +863,115 @@ def simple_chat(model, tokenizer,
                       verbose=True)
 
 
-# ------------------------------------------------------------------
-# 6. Gradio Interface Functions
-# ------------------------------------------------------------------
-def initialize_model(checkpoint_path):
-    """Initialize the model and tokenizer"""
-    global global_model, global_tokenizer
+def interactive_multi_turn_chat(model, tokenizer, max_tokens=512):
+    """Interactive multi-turn chat interface"""
+    print("\n" + "=" * 80)
+    print("🤖 InternVL Multi-Turn Streaming Chat")
+    print("=" * 80)
+    print("Instructions:")
+    print("1. First, input your human instruction (navigation command)")
+    print("2. Then input image paths one by one")
+    print("3. Type 'quit' or 'exit' to end the conversation")
+    print("4. Type 'reset' to start a new conversation")
+    print("=" * 80)
     
-    if global_model is None:
-        print("Loading model for the first time...")
-        global_model, global_tokenizer = load_model_and_tokenizer(checkpoint_path)
-        global_model = patch_model_chat_method(global_model)
-        print("Model loaded successfully!")
+    conversation_initialized = False
     
-    return global_model, global_tokenizer
+    while True:
+        try:
+            if not conversation_initialized:
+                # Get human instruction
+                print("\n📝 Please input your human instruction:")
+                human_instruction = input("Human Instruction: ").strip()
+                
+                if human_instruction.lower() in ['quit', 'exit']:
+                    break
+                    
+                if not human_instruction:
+                    print("❌ Human instruction cannot be empty. Please try again.")
+                    continue
+                
+                # Initialize conversation
+                response = model.multi_turn_streaming_chat(tokenizer, human_instruction, max_tokens)
+                print(f"✅ {response}")
+                conversation_initialized = True
+                
+            else:
+                # Get image path
+                print("\n🖼️  Please input image path (or 'reset' for new conversation, 'quit' to exit):")
+                user_input = input("Image Path: ").strip()
+                #/mnt/zyy/datas/a8cheng/NaVILA-Dataset/R2R/train/5622/frame_0.jpg
 
-
-def predict(image_video_file, file_path_input, question, num_frames, max_patches, max_tokens):
-    """Main prediction function for Gradio interface"""
-    try:
-        # Determine which input to use: uploaded file or file path
-        if image_video_file is not None:
-            file_path = image_video_file
-            print(f"Using uploaded file: {file_path}")
-        elif file_path_input and file_path_input.strip():
-            file_path = file_path_input.strip()
-            print(f"Using server file path: {file_path}")
-        else:
-            return "Please either upload a file or enter a file path."
-        
-        # Check if file exists
-        if not os.path.exists(file_path):
-            return f"File not found: {file_path}"
-        
-        if not question.strip():
-            return "Please enter a question."
-        
-        # Get model and tokenizer
-        global global_model, global_tokenizer
-        if global_model is None:
-            model, tokenizer = initialize_model(
-                '/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2/checkpoint-5400'
-            )
-        else:
-            model = global_model
-            tokenizer = global_tokenizer
-        
-        # Get file extension
-        file_ext = file_path.lower()
-        
-        # Load media based on file type
-        if file_ext.endswith(('.mp4', '.avi', '.mov', '.mkv', '.gif')):
-            # Video processing
-            imgs = load_video_frames(file_path,
-                                   min_frames=num_frames,
-                                   max_frames=num_frames,
-                                   sampling='rand')
-            if not imgs:
-                return "Failed to load video frames."
-            
-            frame_info = '\n'.join([f'Frame-{i+1}: <image>' for i in range(len(imgs))])
-            q = question.replace('<video>', frame_info) if '<video>' in question \
-                else frame_info + '\n' + question
-            max_patches = 1  # For video, use 1 patch per frame
-        else:
-            # Image processing
-            try:
-                imgs = [load_image(file_path)]
-                q = '<image>\n' + question if '<image>' not in question else question
-            except Exception as e:
-                return f"Failed to load image: {str(e)}"
-        
-        # Preprocess images/frames
-        print("Preprocessing images/frames...")
-        pv1, pv2 = preprocess_images(imgs,
-                                   image_size=model.config.force_image_size
-                                   or model.config.vision_config.image_size,
-                                   dynamic_size=True,
-                                   use_thumbnail=model.config.use_thumbnail,
-                                   max_patches=max_patches)
-        
-        print(f"Encoder-1 tensor: {tuple(pv1.shape)}")
-        print(f"Encoder-2 tensor: {tuple(pv2.shape)}")
-        
-        # Generate response
-        print("Generating response...")
-        answer = simple_chat(model, tokenizer, pv1, pv2,
-                           question=q, max_tokens=max_tokens)
-        
-        return answer
-        
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-
-def create_gradio_interface():
-    """Create and configure the Gradio interface"""
-    
-    def process_request(image_video_file, file_path_input, question, num_frames, max_patches, max_tokens):
-        return predict(image_video_file, file_path_input, question, int(num_frames), int(max_patches), int(max_tokens))
-    
-    def clear_inputs():
-        return None, "", "Describe what you see in detail.", 8, 6, 512
-    
-    # Create interface using gr.Interface instead of gr.Blocks
-    interface = gr.Interface(
-        fn=process_request,
-        inputs=[
-            gr.File(label="Upload Image or Video (Option 1)"),
-            gr.Textbox(label="Or Enter File Path on Server (Option 2)", placeholder="/path/to/your/image_or_video.jpg", lines=1),
-            gr.Textbox(label="Question", value="Describe what you see in detail.", lines=3),
-            gr.Number(label="Number of Frames (for video)", value=8, minimum=4, maximum=32),
-            gr.Number(label="Max Patches (for image)", value=6, minimum=1, maximum=12), 
-            gr.Number(label="Max Tokens", value=512, minimum=50, maximum=2048)
-        ],
-        outputs=gr.Textbox(label="Response", lines=10),
-        title="InternVL-Chat Dual Encoder Demo",
-        description="**Two ways to input files:**\n1. Upload a file using the upload button\n2. Enter the file path on the server\n\n**Example questions:** 'Describe what you see in detail.', 'What is the main subject?', 'What actions are happening?'\n\n**Supported formats:** JPG, PNG, MP4, AVI, MOV, MKV, GIF",
-        allow_flagging="never"
-    )
-    
-    return interface
+                if user_input.lower() in ['quit', 'exit']:
+                    break
+                elif user_input.lower() == 'reset':
+                    model.reset_conversation()
+                    conversation_initialized = False
+                    print("🔄 Conversation reset. Please input new human instruction.")
+                    continue
+                
+                if not user_input:
+                    print("❌ Image path cannot be empty. Please try again.")
+                    continue
+                
+                if not os.path.exists(user_input):
+                    print(f"❌ Image file not found: {user_input}")
+                    continue
+                # Generate response for the new image
+                print(f"\n🔄 Processing image: {user_input}")
+                print("⚡ Generating response...")
+                
+                response = model.add_image_and_generate(tokenizer, user_input, max_tokens)
+                
+                print("\n" + "=" * 60)
+                print("🤖 MODEL RESPONSE:")
+                print("=" * 60)
+                print(response)
+                print("=" * 60)
+                
+        except KeyboardInterrupt:
+            print("\n\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"\n❌ Error: {str(e)}")
+            print("Please try again or type 'reset' to start over.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo')
-    parser.add_argument('--checkpoint', default='/mnt/chengchangxu/projects/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_3/checkpoint-1200',
+    parser = argparse.ArgumentParser(description='InternVL‑Chat Dual‑Encoder Demo with Multi-Turn Streaming')
+    parser.add_argument('--checkpoint', default='/mnt/chensenda/codes/VLN/InternVL/internvl_chat/work_dirs/internvl_chat_dual_encoder/internvl_chat_dual_encoder_8b_mix_stage2_4/checkpoint-11000',
                         help='Path to dual‑encoder checkpoint')
+    parser.add_argument('--mode', choices=['single', 'interactive'], default='interactive',
+                        help='Mode: single image inference or interactive multi-turn chat')
     parser.add_argument('--input', 
-                        help='Image / video path (for CLI mode)')
-    parser.add_argument('--question',
-                        help='Prompt for the model (for CLI mode)')
-    parser.add_argument('--num-frames', type=int, default=8,
+                        help='Image / video path (required for single mode)')
+    parser.add_argument('--question', default='Describe what you see in detail.',
+                        help='Prompt for the model (single mode only)')
+    parser.add_argument('--num-frames', type=int, default=32,
                         help='Num video frames (sampling)')
-    parser.add_argument('--max-patches', type=int, default=6,
+    parser.add_argument('--max-patches', type=int, default=1,
                         help='Dynamic patches per image')
-    parser.add_argument('--max-tokens', type=int, default=512,
+    parser.add_argument('--max-tokens', type=int, default=4096,
                         help='Generation length')
-    parser.add_argument('--ui', action='store_true',
-                        help='Launch Gradio UI (default mode)')
-    parser.add_argument('--cli', action='store_true',
-                        help='Run in CLI mode instead of UI')
-    parser.add_argument('--share', action='store_true', 
-                        help='Create shareable Gradio link (default: True)')
-    parser.add_argument('--no-share', dest='share', action='store_false',
-                        help='Disable shareable Gradio link')
-    parser.set_defaults(share=True)
-    parser.add_argument('--port', type=int, default=17969,
-                        help='Port for Gradio interface')
-    
     args = parser.parse_args()
-    
-    # Determine mode: CLI or UI
-    if args.cli and args.input:
-        # CLI mode - original functionality
+
+    # ---- load model ----
+    print("🚀 Loading model and tokenizer...")
+    model, tok = load_model_and_tokenizer(args.checkpoint)
+    model = patch_model_chat_method(model)
+    print("✅ Model loaded successfully!")
+
+    if args.mode == 'interactive':
+        # Interactive multi-turn chat mode
+        interactive_multi_turn_chat(model, tok, args.max_tokens)
+        
+    else:
+        # Single inference mode (original functionality)
+        if not args.input:
+            raise ValueError("--input is required for single mode")
+            
         if not os.path.exists(args.input):
             raise FileNotFoundError(args.input)
-
-        # ---- load model ----
-        model, tok = load_model_and_tokenizer(args.checkpoint)
-        model = patch_model_chat_method(model)
 
         # ---- load media ----
         inp = args.input.lower()
@@ -712,37 +1013,6 @@ def main():
         print("=" * 60)
         print(answer)
         print("=" * 60)
-    
-    else:
-        # UI mode - default
-        print("Launching Gradio interface...")
-        
-        # Pre-initialize model to avoid long wait on first request
-        try:
-            initialize_model(args.checkpoint)
-        except Exception as e:
-            print(f"Warning: Failed to pre-initialize model: {e}")
-            print("Model will be loaded on first request.")
-        
-        # Create and launch interface
-        demo = create_gradio_interface()
-        
-        print(f"Starting Gradio interface on port {args.port}")
-        print("If you see any errors, the public link should still work.")
-        
-        try:
-            demo.launch(
-                share=args.share,
-                server_port=args.port,
-                server_name="0.0.0.0",  # Use 0.0.0.0 for better remote access
-                show_error=True,
-                quiet=False,
-                inbrowser=False  # Don't try to open browser automatically
-            )
-        except Exception as e:
-            print(f"Error launching interface: {e}")
-            print("Trying with minimal configuration...")
-            demo.launch(share=True, server_port=args.port)
 
 
 if __name__ == '__main__':
