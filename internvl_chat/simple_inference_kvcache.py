@@ -15,6 +15,7 @@ import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Commented out to avoid conflicts with other scripts
 import random
 import warnings
+import types
 from typing import List, Union
 
 import cv2
@@ -24,6 +25,7 @@ import torch
 from decord import VideoReader
 from PIL import Image
 from transformers import AutoTokenizer, GenerationConfig
+from transformers.cache_utils import Cache, DynamicCache
 
 from internvl.model import InternVLChatConfig, InternVLChatModel
 from internvl.train.dataset import build_transform, dynamic_preprocess
@@ -818,6 +820,66 @@ def patch_model_chat_method(model):
             delattr(self, 'conversation_state')
         print("[Multi-turn Chat] Conversation reset.")
 
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
+    ):
+        # Omit tokens covered by past_key_values
+        if past_key_values is not None:
+            if isinstance(past_key_values, Cache):
+                cache_length = past_key_values.get_seq_length()
+                past_length = past_key_values.seen_tokens
+                max_cache_length = past_key_values.get_max_length()
+            else:
+                cache_length = past_length = past_key_values[0][0].shape[2]
+                max_cache_length = None
+
+            # Keep only the unprocessed tokens:
+            # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
+            # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
+            # input)
+            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
+                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
+            # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
+            # input_ids based on the past_length.
+            elif past_length < input_ids.shape[1]:
+                input_ids = input_ids[:, past_length:]
+                inputs_embeds = inputs_embeds[:, past_length:]
+            # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
+
+            # If we are about to go beyond the maximum cache length, we need to crop the input attention mask.
+            if (
+                max_cache_length is not None
+                and attention_mask is not None
+                and cache_length + input_ids.shape[1] > max_cache_length
+            ):
+                attention_mask = attention_mask[:, -max_cache_length:]
+
+        position_ids = kwargs.get("position_ids", None)
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -input_ids.shape[1] :]
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            if inputs_embeds.shape[1] != 0:
+                model_inputs = {"inputs_embeds": inputs_embeds}
+            else:
+                model_inputs = {"input_ids": input_ids}     #中途需要加入image embedding
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": kwargs.get("use_cache"),
+                "attention_mask": attention_mask,
+            }
+        )
+        return model_inputs
     # —— 绑定到实例 —— #
     model.generate_with_dual_encoder = types.MethodType(generate_with_dual_encoder, model)
     model.chat = types.MethodType(chat_with_dual_encoder, model)
@@ -829,6 +891,7 @@ def patch_model_chat_method(model):
     model._insert_image_tokens = types.MethodType(_insert_image_tokens, model)
     model._trim_cache_to_length = types.MethodType(_trim_cache_to_length, model)
     model.reset_conversation = types.MethodType(reset_conversation, model)
+    model.language_model.prepare_inputs_for_generation = types.MethodType(prepare_inputs_for_generation, model.language_model)
     return model
 
 
@@ -935,6 +998,7 @@ def interactive_multi_turn_chat(model, tokenizer, max_tokens=512):
         except Exception as e:
             print(f"\n❌ Error: {str(e)}")
             print("Please try again or type 'reset' to start over.")
+
 
 
 def main():
