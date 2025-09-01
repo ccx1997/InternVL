@@ -1,0 +1,142 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        
+
+
+
+        // {
+        //     "name": "Python Debugger: Current File with Arguments",
+        //     "type": "debugpy",
+        //     "request": "launch",
+        //     "program": "${file}",
+        //     "console": "integratedTerminal",
+        //     "args": ["--input-file", "image_test/input_question/image1.txt", "--question-file", "image_test/input_question/question1.txt", "--output", "image_test/input_question/output1.txt"]
+        // },
+        {
+            "name": "Debug InternVL 3.5 Training Torchrun",
+            "type": "python",
+            "request": "launch",
+            "module": "torch.distributed.run",  
+            "python": "/opt/conda/envs/internvl_env/bin/python",
+            // "program": "${workspaceFolder}/internvl_chat_gpt_oss/internvl/train/internvl_chat_finetune.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/internvl_chat_gpt_oss",
+            "justMyCode": false, 
+            "env": {
+                // "CUDA_LAUNCH_BLOCKING": "1",
+                "CUDA_VISIBLE_DEVICES": "6",
+                "TORCH_LOGS": "+dynamo",
+                "PYTHONPATH": "${workspaceFolder}/internvl_chat_gpt_oss:${env:PYTHONPATH}",
+                "USE_TCS_LOADER": "0"
+            },
+            // "args": [
+            //     "--nnodes", "1", 
+            //     "--node_rank", "0", 
+            //     "--master_addr", "127.0.0.1", 
+            //     "--nproc_per_node", "1", 
+            //     "--master_port", "39860", 
+            //     "${workspaceFolder}/internvl_chat_gpt_oss/internvl/train/internvl_chat_finetune.py",
+            //     "--model_name_or_path", "/mnt/chensenda/codes/VLN/InternVL_video/internvl_chat/work_dirs/internvl_chat_dual_compressor/internvl_chat_dual_compressor_8b_mix_s3_2/checkpoint-11600",
+            //     "--vision_path2", "/mnt/models/VGGT-1B/model.pt",
+            //     "--conv_style", "internvl2_5",
+            //     "--use_fast_tokenizer", "False",
+            //     "--output_dir", "/mnt/jianghc1995/train_debug/internvl_chat_dual_compressor_single_gpu_test",
+            //     "--meta_path", "./shell/data/data4debug.json",
+            //     "--overwrite_output_dir", "True",
+            //     "--force_image_size", "448",
+            //     "--max_dynamic_patch", "6",
+            //     "--down_sample_ratio", "0.5",
+            //     "--drop_path_rate", "0.1",
+            //     "--freeze_llm", "True",
+            //     "--freeze_mlp", "True",
+            //     "--freeze_backbone", "True",
+            //     "--freeze_mlp2", "False",
+            //     "--freeze_vision2", "True",
+            //     "--freeze_vision_compressor", "False",
+            //     "--vision_select_layer", "-1",
+            //     "--dataloader_num_workers", "0",
+            //     "--bf16", "True",
+            //     "--num_train_epochs", "1",
+            //     "--per_device_train_batch_size", "1",
+            //     "--gradient_accumulation_steps", "1",
+            //     "--evaluation_strategy", "no",
+            //     "--save_strategy", "steps",
+            //     "--save_steps", "20",
+            //     "--save_total_limit", "1",
+            //     "--learning_rate", "4e-5",
+            //     "--weight_decay", "0.05",
+            //     "--warmup_ratio", "0.03",
+            //     "--lr_scheduler_type", "cosine",
+            //     "--logging_steps", "1",
+            //     "--max_num_frame", "48",
+            //     "--max_seq_length", "7000",
+            //     "--do_train", "True",
+            //     "--grad_checkpoint", "True",
+            //     "--group_by_length", "True",
+            //     "--dynamic_image_size", "False",
+            //     "--use_thumbnail", "True",
+            //     "--ps_version", "v2",
+            //     "--deepspeed", "zero_stage1_config.json"
+            //     // "--report_to" "tensorboard" 2>&1 | tee -a "${OUTPUT_DIR}/training_log.txt"
+            // ]
+            
+            // 第一阶段训练参数，
+            "args": [
+                "--nnodes", "1", 
+                "--node_rank", "0", 
+                "--master_addr", "127.0.0.1", 
+                "--nproc_per_node", "1", 
+                "--master_port", "39860", 
+                "${workspaceFolder}/internvl_chat_gpt_oss/internvl/train/internvl_chat_finetune.py",
+                "--model_name_or_path", "/mnt/jianghc1995/model/InternVL3_5-8B/",
+                // "--vision_path2", "/mnt/models/VGGT-1B/model.pt",
+                "--conv_style", "internvl3_5_gpt_oss",
+                "--use_fast_tokenizer", "False",
+                "--output_dir", "/mnt/jianghc1995/train_debug/internvl3_5_single_gpu_test",
+                "--meta_path", "./shell/data/data4debug.json",
+                "--overwrite_output_dir", "True",
+                "--force_image_size", "448",
+                "--max_dynamic_patch", "1",
+                "--down_sample_ratio", "0.5",
+                "--drop_path_rate", "0.1",
+                "--freeze_llm", "True",
+                "--freeze_mlp", "False",
+                "--freeze_backbone", "True",
+                // "--freeze_mlp2", "False",
+                // "--freeze_vision2", "True",
+                // "--freeze_vision_compressor", "False",
+                "--vision_select_layer", "-1",
+                "--dataloader_num_workers", "0",
+                "--bf16", "True",
+                "--num_train_epochs", "1",
+                "--per_device_train_batch_size", "1",
+                "--gradient_accumulation_steps", "1",
+                // "--evaluation_strategy", "no",
+                "--save_strategy", "steps",
+                "--save_steps", "200",
+                "--save_total_limit", "1",
+                "--learning_rate", "4e-5",
+                "--weight_decay", "0.05",
+                "--warmup_ratio", "0.03",
+                "--lr_scheduler_type", "cosine",
+                "--logging_steps", "1",
+                "--max_num_frame", "32",
+                "--max_seq_length", "13000",
+                "--do_train", "True",
+                "--grad_checkpoint", "True",
+                "--group_by_length", "True",
+                "--dynamic_image_size", "False",
+                "--use_thumbnail", "True",
+                "--ps_version", "v2",
+                // "--deepspeed", "zero_stage1_config.json"
+                // "--report_to" "tensorboard" 2>&1 | tee -a "${OUTPUT_DIR}/training_log.txt"
+            ]
+
+
+        }
+    ]
+}

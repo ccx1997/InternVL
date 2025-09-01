@@ -1,0 +1,9 @@
+{
+  "R2R": {
+    "root": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/R2R/train/",
+    "annotation": "/mnt/zyy/datas/a8cheng/NaVILA-Dataset/R2R/annotations.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 353894
+  }
+}

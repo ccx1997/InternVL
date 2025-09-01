@@ -1,0 +1,30 @@
+{
+  "roomtour3d": {
+    "root": "/mnt/chengchangxu/data/roomtour3d/room_tour_video_3fps",
+    "annotation": "/mnt/chengchangxu/data/roomtour3d/roomtour3d/p1_train_reformat_std.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 218736
+  },
+  "spacer_151k": {
+    "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
+    "annotation": "/mnt/chensenda/VLNDatas/SpaceR-151k/spacer_151k_vsi_format.jsonl",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 121313
+  },
+  "scanqa": {
+    "root": "",
+    "annotation": "/mnt/chensenda/codes/VLN/ScanQA/ScanQA_v1.0_train_reformat_std_video.json",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 25563
+  },
+  "sqa3d": {
+    "root": "",
+    "annotation": "/mnt/chensenda/codes/VLN/SQA3D/assets/data/sqa_task/balanced/train_reformat_std_video.json",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 26623
+  }
+}

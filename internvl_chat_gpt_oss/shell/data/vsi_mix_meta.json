@@ -1,0 +1,338 @@
+{
+  "spacer_151k":{
+    "root": "/mnt/chengchangxu/data/SpaceR-151k/SpaceR-151k",
+    "annotation": "/mnt/chensenda/VLNDatas/SpaceR-151k/spacer_151k_vsi_format.jsonl",
+    "data_dir":"",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 151000
+  },
+  "objects365": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/Objects365/objects365_train_450k.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 450000
+  },
+  "boxcotrd": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/shikra_data/reformatted/GPT4GEN_RD_BoxCoT_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 1878
+  },
+  "boxcot": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/shikra_data/reformatted/GPT4GEN_BoxCoT_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 4044
+  },
+  "sk_vg": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/sk-vg.v1/sk_vg_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 23339
+  },
+  "cops_ref": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/Cops-Ref/cops-ref_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 11862
+  },
+  "lava_code_feedback_filtered_45k": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/jsons/peter__data__text__code_feedback/lava_code_feedback_filtered_45k.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 46957
+  },
+  "lava_all_gpt4_51k_train": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/jsons/peter__highquality__wildchat__data/lava_all_gpt4_51k_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 65550
+  },
+  "allava_text": {
+    "root": "/mnt/liuyi/datasets/ALLAVA-4V",
+    "annotation": "/mnt/liuyi/datasets/ALLAVA-4V/allava_text/Evol-Instruct-GPT4-Turbo-143K.jsonl.checked.jsonl",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 142598
+  },
+  "mix_mathinstruct26k_metamathqa39k": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/jsons/peter__data__math/mix_mathinstruct26k_metamathqa39k.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 65690
+  },
+  "mix_open_orca_gpt4_20k_orca_math_100k_miu": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/jsons/peter__proj__mix0703/mix_open_orca_gpt4_20k_orca_math_100k_miu.json",
+    "data_dir": "/mnt/chengchangxu/data",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 119548
+  },
+  "lava_dolly_15k": {
+    "root": "",
+    "annotation": "/mnt/chengchangxu/data/jsons/peter__data__text__dolly/lava_dolly_15k.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 14972
+  },
+  "CogVLMSFT_multi_conversation_train_format_mixlang_30k": {
+    "root": "/mnt/hongyuting/CogVLM-SFT/CogVLM-SFT-311K/llava_instruction_multi_conversations_formate",
+    "annotation": "jsons/peter__proj__mix0508__clip_process_filter2/CogVLMSFT_multi_conversation_train_format_mixlang_30k.json",
+    "data_dir": "/mnt/chengchangxu/data",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 144771
+  },
+  "SVIT_core_60K_1000_1000_scaffold_costhan0.12": {
+    "root": "/mnt/hongyuting/SVIT",
+    "annotation": "jsons/peter__proj__mix0703/SVIT_core_60K_1000_1000_scaffold_costhan0.12.json",
+    "data_dir": "/mnt/chengchangxu/data",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 131153
+  },
+  "llava150k": {
+    "root": "/mnt/chensenda/datas/train2017/train2017",
+    "annotation": "/mnt/wlf/datas/LLaVA-Instruct-150K/llava_instruct_150k.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 131153
+  },
+  "docci_descriptions_checked_14k": {
+    "root": "/mnt/hongyuting/docci",
+    "annotation": "jsons/liwenhao__docci/docci_descriptions_checked_14k.json",
+    "data_dir": "/mnt/chengchangxu/data",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 14847
+  },
+  "vqav2": {
+    "root": "",
+    "annotation": "/mnt/chensenda/datas/VQAv2/process_jsons/VQAv2_processed.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 131153
+  },
+  "gqa_balanced": {
+    "root": "/mnt/liuyi/datasets/GQA/images",
+    "annotation": "/mnt/liuyi/datasets/GQA/gqa_balanced.jsonl",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 268616
+  },
+  "synth_clock": {
+    "root": "/mnt/chengchangxu/data/clocks/images",
+    "annotation": "/mnt/chengchangxu/data/clocks/clocks_train.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 6000
+  },
+  "ai2d_train_10k": {
+    "root": "/mnt/liuyi/datasets/InternVL-Chat-V1-2-SFT-Data/data/ai2d/images",
+    "annotation": "/mnt/liuyi/datasets/yi_data/ai2d_qa_10k_train.jsonl",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 10936
+  },
+  "MMInstruct-GPT4V_sampled": {
+    "root": "/mnt/liuyi/datasets/MMInstruct-GPT4V/images",
+    "annotation": "/mnt/chengchangxu/data/MMInstruct-GPT4V_filter_zh_222269.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 222266
+  },
+  "aokvqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_aokvqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 16539
+  },
+  "visual7w": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_visual7w.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 14366
+  },
+  "tallyqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_tallyqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 19705
+  },
+  "clevr": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_clevr.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 55913
+  },
+  "iconqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_iconqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 21820
+  },
+  "raven": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_raven.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 10499
+  },
+  "textvqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_textvqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 11002
+  },
+  "st_vqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_st_vqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 3446
+  },
+  "visualmrc": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_visualmrc.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 3030
+  },
+  "infographic_vqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_infographic_vqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 2120
+  },
+  "diagram_image_to_text": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_diagram_image_to_text.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 300
+  },
+  "chart2text": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_chart2text.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 13566
+  },
+  "vistext": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_vistext.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 5023
+  },
+  "chartqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_chartqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 9158
+  },
+  "docvqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_docvqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 1000
+  },
+  "plotqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_plotqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 12608
+  },
+  "figureqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_figureqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 10105
+  },
+  "mapqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_mapqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 1134
+  },
+  "tabmwp": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_tabmwp.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 8979
+  },
+  "tat_qa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_tat_qa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 2000
+  },
+  "hitab": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_hitab.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 2000
+  }
+}

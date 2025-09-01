@@ -1,0 +1,26 @@
+{
+  "textvqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_textvqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 11002
+  },
+  "st_vqa": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_st_vqa.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 3446
+  },
+  "visualmrc": {
+    "root": "/mnt/chengchangxu/projects/data_factory",
+    "annotation": "/mnt/chengchangxu/projects/data_factory/process_json/processed_data_visualmrc.json",
+    "data_dir": "",
+    "data_augment": false,
+    "repeat_time": 1,
+    "length": 2885
+  }
+}
