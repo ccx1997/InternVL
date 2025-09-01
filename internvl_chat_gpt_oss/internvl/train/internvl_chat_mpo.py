@@ -36,7 +36,7 @@ from internvl.model.internvl_chat import (
     InternVisionConfig, InternVisionModel,
     InternVLChatConfig, InternVLChatModel,
 )
-from internvl.patch import concat_pad_data_collator, dpo_concat_pad_data_collator, replace_gpt_oss_with_flash_sink_attn, replace_train_dataloader, replace_train_sampler
+from internvl.patch import concat_pad_data_collator, dpo_concat_pad_data_collator, replace_gpt_oss_with_flash_sink_attn, replace_train_dataloader
 from internvl.train.constants import (
     BOX_END_TOKEN, BOX_START_TOKEN,
     IMG_END_TOKEN, IMG_START_TOKEN,  IMG_CONTEXT_TOKEN,
@@ -342,19 +342,6 @@ class LazySupervisedDataset(Dataset):
 
     def __len__(self):
         return len(self.raw_data)
-    
-    def get_lengths(self):
-        """
-        Return precomputed lengths for LengthGroupedSampler to avoid calling __getitem__ on all samples.
-        This method is called by trainer when group_by_length=True.
-        """
-        if hasattr(self, 'length') and self.length:
-            return self.length
-        else:
-            # Return estimated lengths to avoid processing all data
-            logger.warning("Using estimated lengths for group_by_length. "
-                          "Consider pre-computing and storing lengths in your data files for better accuracy.")
-            return [512] * len(self.raw_data)  # Default estimate
 
     def get_preprocess_function(self, use_pretrain=False):
         # Select the appropriate preprocessing function based on the template name
@@ -902,7 +889,6 @@ def build_datasets(
 
 def main():
     replace_train_dataloader()
-    replace_train_sampler()  # This is the key fix!
 
     # Parse input arguments
     # See all possible arguments in src/transformers/training_args.py
@@ -917,10 +903,8 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # training_args.loss_type = ['sigmoid', 'bco_pair', 'sft']
-    # training_args.loss_weights = [0.8, 0.2, 1.0]
-    training_args.loss_type = ['sigmoid', 'sft']
-    training_args.loss_weights = [1.0, 1.0]
+    training_args.loss_type = ['sigmoid', 'bco_pair', 'sft']
+    training_args.loss_weights = [0.8, 0.2, 1.0]
     training_args.remove_unused_columns = False
     training_args.max_length = data_args.max_seq_length
     training_args.gradient_checkpointing = model_args.grad_checkpoint
